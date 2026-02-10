@@ -1,0 +1,52 @@
+
+복사
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# Config (실제 인프라 정보)
+config/aws.yaml
+**/config/aws.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Spark
+*.jar
+metastore_db/
+spark-warehouse/
+derby.log
+
+# 패키징
+*.zip
+
+# 환경변수
+.env
+.env.*
+**/.env
+
+**/data/
+
+# 테스트/커버리지
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
