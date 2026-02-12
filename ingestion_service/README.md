@@ -127,6 +127,8 @@ aws lambda create-function \
 
 ## 테스트
 
+road_network_builer에서 생성된 도로 네트워크 데이터를 producer 모듈에 추가합니다.
+
 ```bash
 # 프로듀서로 더미 데이터 전송 (863호선 실제 좌표 기반)
 cd producer
