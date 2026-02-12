@@ -133,7 +133,7 @@ road_network_builer에서 생성된 도로 네트워크 데이터를 producer �
 # 프로듀서로 더미 데이터 전송 (863호선 실제 좌표 기반)
 cd producer
 pip install boto3
-S3_STREAM_NAME="your_stream_name"
+S3_STREAM_NAME="your_stream_name" #환경변수 지정 
 python producer.py --vehicles 3 --pothole-rate 0.3 --noise
 ```
 
