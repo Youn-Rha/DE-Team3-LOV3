@@ -1,0 +1,22 @@
+app:
+  name: "PotholeSegmentAnalyzer"
+  log_level: "INFO"
+
+input:
+  # 이미 필터링된 데이터 경로
+  # sensor_data_path: "s3a://your-bucket/stage1_anomaly_detected/dt=2026-02-12/"
+  # road_network_path: "s3a://your-bucket/road-network/data/"
+  sensor_data_path: "data/dt=2026-02-12/"
+  road_network_path: "data/road_network_863.csv"
+
+rdb:
+  host: "127.0.0.1"
+  port: 3306
+  user: "pothole_user"
+  password: "secure_password"
+  database: "road_safety"
+  table: "pothole_segments"
+  batch_size: 1000
+
+processing:
+  join_broadcast_limit: 100
