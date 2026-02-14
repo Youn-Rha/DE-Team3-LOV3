@@ -56,8 +56,8 @@ class PotholeLoader:
 
     def __init__(self, config_path="config.yaml"):
         """설정 로드 및 DB 연결 초기화"""
-        self.config = self._load_config(config_path)
         self.logger = self._setup_logger()
+        self.config = self._load_config(config_path)
         self.db_engine = self._create_db_connection()
 
     def _load_config(self, config_path):
@@ -65,14 +65,13 @@ class PotholeLoader:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
-            self.logger = logging.getLogger(__name__)
             self.logger.info(f"Config loaded from {config_path}")
             return config
         except FileNotFoundError:
-            print(f"Config file not found: {config_path}")
+            self.logger.error(f"Config file not found: {config_path}")
             sys.exit(1)
         except yaml.YAMLError as e:
-            print(f"YAML parse error: {e}")
+            self.logger.error(f"YAML parse error: {e}")
             sys.exit(1)
 
     def _setup_logger(self):
@@ -144,14 +143,20 @@ class PotholeLoader:
             if not parquet_files:
                 raise FileNotFoundError(f"No parquet files found in S3: {s3_path}")
 
-            # 첫 번째 parquet 파일 읽기
-            parquet_key = parquet_files[0]
-            self.logger.info(f"Reading parquet file: {parquet_key}")
+            # 모든 parquet 파일을 읽어서 하나의 DataFrame으로 병합
+            df_list = []
+            for parquet_key in parquet_files:
+                self.logger.info(f"Reading parquet file: s3://{bucket}/{parquet_key}")
+                obj = s3_client.get_object(Bucket=bucket, Key=parquet_key)
+                df_part = pd.read_parquet(obj['Body'])
+                df_list.append(df_part)
 
-            obj = s3_client.get_object(Bucket=bucket, Key=parquet_key)
-            df = pd.read_parquet(obj['Body'])
+            if not df_list:
+                raise IOError(f"Failed to read parquet files from: {s3_path}")
 
-            self.logger.info(f"Loaded {len(df)} records from S3")
+            df = pd.concat(df_list, ignore_index=True)
+
+            self.logger.info(f"Loaded {len(df)} records from S3 ({len(parquet_files)} files)")
 
             # date 컬럼 추가
             df["date"] = execution_date
