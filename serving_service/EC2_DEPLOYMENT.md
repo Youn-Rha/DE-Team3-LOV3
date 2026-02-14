@@ -56,9 +56,9 @@ sudo systemctl start docker
 
 # .env 파일 생성
 cat > .env << EOF
-POSTGRES_PASSWORD=pothole_secure_2026
+POSTGRES_PASSWORD=your-strong-postgres-password
 SUPERSET_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-SUPERSET_ADMIN_PASSWORD=superset_secure_2026
+SUPERSET_ADMIN_PASSWORD=your-strong-admin-password
 POSTGRES_HOST=postgres
 S3_BUCKET=pothole-detection-results
 EOF
