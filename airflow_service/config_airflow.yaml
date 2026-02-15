@@ -33,7 +33,7 @@ emr:
     keep_job_flow_alive_when_no_steps: true
     termination_protected: false
     job_flow_role: softeer-7-DE3-EMR
-    service_role: softeer-7-DE3-EMR
+    service_role: softeer-7-DE3-EMR-service
     ec2_subnet_id: subnet-02b504519fdb3d22a
 
 s3:
