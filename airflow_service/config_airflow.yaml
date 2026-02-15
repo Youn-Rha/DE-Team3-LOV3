@@ -1,0 +1,54 @@
+airflow:
+  dag_id: emr_pothole_detection_pipeline
+  owner: softeer-DE3
+  schedule_interval: null
+  start_date: '2026-01-01'
+  retries: 1
+  retry_delay_minutes: 5
+  catchup: false
+
+aws:
+  region: ap-northeast-2
+  
+emr:
+  cluster:
+    name: Stage1-Anomaly-Detection-Cluster
+    release_label: emr-6.10.0
+    applications:
+      - Spark
+      - Hadoop
+    log_uri: s3://softeer-7-de3-bucket/emr-logs/
+    
+  master_node:
+    instance_type: m5.xlarge
+    instance_count: 1
+    market: ON_DEMAND
+    
+  core_nodes:
+    instance_type: m5.xlarge
+    instance_count: 2
+    market: ON_DEMAND
+    
+  configuration:
+    keep_job_flow_alive_when_no_steps: true
+    termination_protected: false
+    job_flow_role: softeer-7-DE3-EMR
+    service_role: softeer-7-DE3-EMR
+    ec2_subnet_id: subnet-02b504519fdb3d22a
+
+s3:
+  bucket_name: softeer-7-de3-bucket
+  scripts_prefix: scripts
+  raw_data_prefix: raw-sensor-data
+  output_prefix: stage1_anomaly_detected
+
+spark:
+  deploy_mode: cluster
+  master: yarn
+  py_files: s3://softeer-7-de3-bucket/scripts/connection.py
+  main_script: s3://softeer-7-de3-bucket/scripts/stage1_anomaly_detection.py
+  
+airflow_config:
+  aws_conn_id: aws_default
+  action_on_failure: TERMINATE_CLUSTER
+  trigger_rule: all_done
