@@ -49,9 +49,7 @@ class EmailReporter(BaseLoader):
                 date,
                 affected_segments,
                 total_impacts,
-                critical_segments,
-                avg_precipitation,
-                avg_temperature
+                critical_segments
             FROM mv_daily_summary
             WHERE date = '{date}'
         """
@@ -65,8 +63,6 @@ class EmailReporter(BaseLoader):
                     "affected_segments": row[1],
                     "total_impacts": row[2],
                     "critical_segments": row[3],
-                    "avg_precipitation": row[4],
-                    "avg_temperature": row[5],
                 }
             else:
                 self.logger.warning(f"No data found for {date}")
@@ -170,6 +166,8 @@ class EmailReporter(BaseLoader):
                         </td>
                     </tr>
                 </table>
+
+                <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
 
                 <h3>🔴 상위 보수 우선순위 세그먼트 (Top 5)</h3>
                 <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
