@@ -1,0 +1,12 @@
+# Fake Data Generator - 의존성
+
+# AWS
+boto3>=1.26.0
+
+# 데이터 처리
+pyarrow>=10.0.0
+pandas>=1.5.0
+
+aioboto3
+# 로깅
+# 기본 logging 모듈 사용
