@@ -1,94 +1,92 @@
--- Layer 3: Serving - Materialized View (Mart Layer) 생성
--- Superset이 직접 사용할 집계 및 조인 뷰
+-- Layer 3: Serving - View 생성
+-- 기존 Materialized View 제거 후 일반 View 3개 생성
 
--- 1. mv_pothole_context: 포트홀 기본 컨텍스트
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_pothole_context AS
-SELECT
-    p.s_id,
-    p.centroid_lon,
-    p.centroid_lat,
-    p.date,
-    p.impact_count,
-    CASE
-        WHEN p.impact_count > 5 THEN 'critical'
-        WHEN p.impact_count > 3 THEN 'warning'
-        ELSE 'normal'
-    END AS risk_level
-FROM pothole_segments p
-ORDER BY p.date DESC, p.s_id;
+-- 기존 MV 제거
+DROP MATERIALIZED VIEW IF EXISTS mv_pothole_context CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mv_daily_summary CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mv_repair_priority CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mv_segment_trend CASCADE;
 
--- mv_pothole_context 인덱스 (REFRESH CONCURRENTLY 필수)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_context
-    ON mv_pothole_context(s_id, date);
-
--- 2. mv_daily_summary: 일별 요약 통계
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_daily_summary AS
-SELECT
-    p.date,
-    COUNT(DISTINCT p.s_id) AS affected_segments,
-    SUM(p.impact_count) AS total_impacts,
-    COUNT(CASE WHEN p.impact_count > 5 THEN 1 END) AS critical_segments,
-    COUNT(CASE WHEN p.impact_count > 3 AND p.impact_count <= 5 THEN 1 END) AS warning_segments,
-    MIN(p.impact_count) AS min_impacts,
-    MAX(p.impact_count) AS max_impacts,
-    ROUND(AVG(p.impact_count)::NUMERIC, 2) AS avg_impacts
-FROM pothole_segments p
-GROUP BY p.date
-ORDER BY p.date DESC;
-
--- mv_daily_summary 인덱스
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_daily_summary
-    ON mv_daily_summary(date);
-
--- 3. mv_repair_priority: 보수 우선순위 (최근 30일 기준)
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_repair_priority AS
+-- 1. repair_priority: 보수 우선순위 (최근 7일 기준)
+--    impact_ratio = impact_count / total_count 포함
+CREATE OR REPLACE VIEW repair_priority AS
 SELECT
     p.s_id,
     p.centroid_lon,
     p.centroid_lat,
     SUM(p.impact_count) AS total_impacts,
-    ROUND(AVG(p.impact_count)::NUMERIC, 2) AS avg_daily_impacts,
+    SUM(p.total_count) AS total_points,
+    ROUND(
+        (SUM(p.impact_count)::NUMERIC / NULLIF(SUM(p.total_count), 0)),
+        4
+    ) AS impact_ratio,
     COUNT(DISTINCT p.date) AS detected_days,
     MIN(p.date) AS first_detected,
-    MAX(p.date) AS last_detected,
-    ROUND(
-        SUM(p.impact_count) *
-        COUNT(DISTINCT p.date) *
-        (1 + LN(GREATEST(SUM(p.impact_count), 1)))::NUMERIC,
-        2
-    ) AS priority_score
+    MAX(p.date) AS last_detected
 FROM pothole_segments p
-WHERE p.date >= CURRENT_DATE - INTERVAL '30 days'
+WHERE p.date >= CURRENT_DATE - INTERVAL '7 days'
 GROUP BY p.s_id, p.centroid_lon, p.centroid_lat
-ORDER BY priority_score DESC;
+ORDER BY total_impacts DESC;
 
--- mv_repair_priority 인덱스
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_repair_priority
-    ON mv_repair_priority(s_id);
-
--- 4. mv_segment_trend: 세그먼트 시계열 추이
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_segment_trend AS
+-- 2. worsening_alert: 악화 구간 경보
+--    rolling 7일 평균 대비 당일 150% 초과 구간
+CREATE OR REPLACE VIEW worsening_alert AS
+WITH daily AS (
+    SELECT
+        s_id,
+        centroid_lon,
+        centroid_lat,
+        date,
+        impact_count,
+        AVG(impact_count) OVER (
+            PARTITION BY s_id
+            ORDER BY date
+            ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+        ) AS rolling_7d_avg
+    FROM pothole_segments
+)
 SELECT
-    p.s_id,
-    p.centroid_lon,
-    p.centroid_lat,
-    p.date,
-    p.impact_count,
+    d.s_id,
+    d.centroid_lon,
+    d.centroid_lat,
+    d.date,
+    d.impact_count,
+    ROUND(d.rolling_7d_avg::NUMERIC, 2) AS rolling_7d_avg,
     ROUND(
-        AVG(p.impact_count) OVER (
-            PARTITION BY p.s_id
-            ORDER BY p.date
-            ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
-        )::NUMERIC,
-        2
-    ) AS rolling_7d_avg,
-    (p.impact_count - LAG(p.impact_count, 7) OVER (
-        PARTITION BY p.s_id
-        ORDER BY p.date
-    )) AS week_over_week_change
-FROM pothole_segments p
-ORDER BY p.s_id, p.date DESC;
+        (d.impact_count::NUMERIC / NULLIF(d.rolling_7d_avg, 0)) * 100,
+        1
+    ) AS pct_of_avg
+FROM daily d
+WHERE d.rolling_7d_avg > 0
+  AND d.impact_count > d.rolling_7d_avg * 1.5
+  AND d.date = (SELECT MAX(date) FROM pothole_segments)
+ORDER BY pct_of_avg DESC;
 
--- mv_segment_trend 인덱스
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_segment_trend
-    ON mv_segment_trend(s_id, date);
+-- 3. daily_kpi: 전일 대비 탐지 건수/구간 수 변화
+CREATE OR REPLACE VIEW daily_kpi AS
+WITH daily_stats AS (
+    SELECT
+        date,
+        SUM(impact_count) AS total_impacts,
+        COUNT(DISTINCT s_id) AS active_segments
+    FROM pothole_segments
+    GROUP BY date
+),
+latest_two AS (
+    SELECT
+        date,
+        total_impacts,
+        active_segments,
+        LAG(total_impacts) OVER (ORDER BY date) AS prev_impacts,
+        LAG(active_segments) OVER (ORDER BY date) AS prev_segments
+    FROM daily_stats
+)
+SELECT
+    date,
+    total_impacts,
+    active_segments,
+    total_impacts - COALESCE(prev_impacts, 0) AS impact_change,
+    active_segments - COALESCE(prev_segments, 0) AS segment_change
+FROM latest_two
+ORDER BY date DESC
+LIMIT 1;
