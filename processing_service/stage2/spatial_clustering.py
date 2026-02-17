@@ -4,17 +4,18 @@ import traceback
 from scipy.spatial import cKDTree
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
+from pyspark.sql.types import StringType, IntegerType
 
 
 class PotholeSegmentProcessor:
     """
-    S3 센서 데이터를 도로 세그먼트에 매핑하고, 단순 발생 횟수를 집계하여
-    S3에 Parquet 형식으로 저장하는 최적화된 프로세서.
+    S3 센서 데이터를 도로 세그먼트에 매핑하고, `is_pothole` 플래그를 사용하여
+    포트홀 발생 횟수(`impact_count`)와 전체 데이터 포인트 수(`total_count`)를 집계하여
+    S3에 Parquet 형식으로 저장하는 프로세서.
 
     Note:
-        Input 데이터는 이미 필터링된(충격이 있는) 데이터이므로,
-        별도의 Score 계산 없이 행 개수(Count)만 집계합니다.
+        Input 데이터는 `stage1`에서 `is_pothole` 플래그(Boolean)가 계산되어 넘어오므로,
+        `impact_score`를 직접 재평가하지 않고 `is_pothole` 플래그를 사용합니다.
     """
 
     def __init__(self, config_path="config.yaml"):
@@ -40,13 +41,21 @@ class PotholeSegmentProcessor:
         self.logger = self.spark._jvm.org.apache.log4j.LogManager.getLogger(__name__)
 
     def load_data(self):
-        """S3 데이터 로드."""
+        """S3 데이터 로드 및 도로망 중심점 계산."""
         self.logger.info("Loading Data from S3...")
+        # stage1에서 is_pothole 플래그가 추가된 센서 데이터 로드
         self.sensor_df = self.spark.read.parquet(self.config['input']['sensor_data_path'])
         self.road_df = self.spark.read.format("csv") \
             .option("header", "true") \
             .option("inferSchema", "true") \
             .load(self.config['input']['road_network_path'])
+
+        # 도로 세그먼트 중심점 미리 계산
+        self.road_centroids_df = self.road_df.withColumn(
+           "centroid_lon", (F.col("start_lon") + F.col("end_lon")) / 2
+        ).withColumn(
+           "centroid_lat", (F.col("start_lat") + F.col("end_lat")) / 2
+        ).select("s_id", "centroid_lon", "centroid_lat").distinct()
 
     def _prepare_spatial_index(self):
         """KDTree 생성 및 Broadcast (Spatial Join 준비)."""
@@ -83,21 +92,21 @@ class PotholeSegmentProcessor:
         self.mapped_df = self.sensor_df.withColumn(
             "s_id",
             find_segment_udf(F.col("lon"), F.col("lat"))
-        )
+        ).filter(F.col("s_id").isNotNull())
 
     def aggregate_metrics(self):
         """
-        오직 세그먼트별 '발생 횟수(Count)'만 집계합니다.
+        세그먼트별로 'impact_count' (포트홀 발생 횟수)와 'total_count' (전체 데이터 포인트 수)를 집계합니다.
+        - impact_count: `is_pothole` 플래그가 true인 데이터 포인트의 수
+        - total_count: 해당 세그먼트에 매핑된 모든 데이터 포인트의 수
         """
-        # 'date' 컬럼에 코드 실행 시점의 현재 날짜를 추가
+        # 집계 날짜 'date' 컬럼 추가 (처리 시점의 날짜 사용)
         df_with_date = self.mapped_df.withColumn("date", F.current_date())
 
-        # 단순 카운트 및 좌표 추출
-        # avg, max 등의 연산이 없어 셔플링 데이터 크기가 최소화됨
-        self.result_df = df_with_date.groupBy("s_id", "date").agg(
-            F.count("*").alias("impact_count"),  # 단순히 몇 건 발생했는지 카운트
-            F.first("lon").alias("centroid_lon"),  # 대표 좌표 (시각화용)
-            F.first("lat").alias("centroid_lat")
+        # is_pothole (Boolean)을 정수(0 또는 1)로 변환하여 합산
+        self.aggregated_df = df_with_date.groupBy("s_id", "date").agg(
+            F.sum(F.col("is_pothole").cast(IntegerType())).alias("impact_count"),
+            F.count("*").alias("total_count")
         )
 
     def save_to_s3(self):
@@ -112,10 +121,24 @@ class PotholeSegmentProcessor:
             .parquet(output_path)
 
     def run(self):
-        self.logger.info("Starting Light-weight Job")
+        self.logger.info("Starting Pothole Segment Aggregation Job")
         self.load_data()
         self.map_points_to_segments()
         self.aggregate_metrics()
+
+        # 집계 결과와 도로 중심점 정보 조인
+        self.result_df = self.aggregated_df.join(
+            self.road_centroids_df,
+            "s_id",
+            "left"
+        ).select( # 요구되는 컬럼 순서 및 이름으로 최종 DataFrame 구성
+            "s_id",
+            "centroid_lon",
+            "centroid_lat",
+            "date",
+            "impact_count",
+            "total_count"
+        ).orderBy("date", "s_id") # 일관된 출력을 위해 정렬
 
         self.logger.info("--- Aggregated Results Preview (Top 20) ---")
         #self.result_df.show() # 테스트용 print
