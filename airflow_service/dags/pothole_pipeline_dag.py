@@ -12,26 +12,27 @@ Spark Standalone 클러스터 기반 포트홀 탐지 파이프라인 DAG
   8. stop_cluster         — Spark stop-all.sh + EC2 중지 (trigger_rule=all_done)
 """
 
+import os
+
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.providers.ssh.operators.ssh import SSHOperator
-from airflow.utils.dates import days_ago
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 # ============================================================
-# 설정
+# 설정 — 환경변수에서 로드 (Airflow EC2의 ~/.bashrc 또는 airflow.cfg에 설정)
 # ============================================================
-MASTER_INSTANCE_ID = "i-0786ec0b7fdaf6597"  # TODO: 실제 값으로 변경
-WORKER1_INSTANCE_ID = "i-0542358d86122c278"  # TODO: 실제 값으로 변경
-WORKER2_INSTANCE_ID = "i-0e6b59258b5c3bc5c"  # TODO: 실제 값으로 변경
-MASTER_PRIVATE_IP = "10.0.1.41"  # TODO: 실제 값으로 변경
-AWS_REGION = "ap-northeast-2"
+MASTER_INSTANCE_ID = os.environ.get("MASTER_INSTANCE_ID", "")
+WORKER1_INSTANCE_ID = os.environ.get("WORKER1_INSTANCE_ID", "")
+WORKER2_INSTANCE_ID = os.environ.get("WORKER2_INSTANCE_ID", "")
+MASTER_PRIVATE_IP = os.environ.get("MASTER_PRIVATE_IP", "")
+AWS_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 
-S3_BUCKET = "softeer-final-porj"
-S3_CODE_PREFIX = "spark-job-code"
-S3_RAW_DATA_PREFIX = "raw-sensor-data"
-S3_STAGE1_OUTPUT_PREFIX = "stage1_anomaly_detected"
-S3_STAGE2_OUTPUT_PREFIX = "stage2_aggregated"
+S3_BUCKET = os.environ.get("S3_BUCKET", "")
+S3_CODE_PREFIX = os.environ.get("S3_CODE_PREFIX", "spark-job-code")
+S3_RAW_DATA_PREFIX = os.environ.get("S3_RAW_DATA_PREFIX", "raw-sensor-data")
+S3_STAGE1_OUTPUT_PREFIX = os.environ.get("S3_STAGE1_OUTPUT_PREFIX", "stage1_anomaly_detected")
+S3_STAGE2_OUTPUT_PREFIX = os.environ.get("S3_STAGE2_OUTPUT_PREFIX", "stage2_aggregated")
 
 SPARK_MASTER_URI = f"spark://{MASTER_PRIVATE_IP}:7077"
 JOB_DIR = "/tmp/spark-job"
@@ -55,7 +56,7 @@ with DAG(
     default_args=default_args,
     description="Spark Standalone 클러스터로 포트홀 탐지 파이프라인 (Stage1 + Stage2)",
     schedule_interval=None,
-    start_date=days_ago(1),
+    start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
     catchup=False,
     max_active_runs=1,
     tags=["spark", "pothole", "pipeline"],

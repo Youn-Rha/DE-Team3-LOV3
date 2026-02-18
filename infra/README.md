@@ -302,25 +302,151 @@ airflow dags list | grep pothole
 
 ### 10-3. 수동 트리거 (테스트)
 
-**Web UI에서:**
-1. `http://<AIRFLOW_EC2_PUBLIC_IP>:8080` 접속 → admin/admin 로그인
-2. DAGs 목록에서 `pothole_pipeline_spark_standalone` 찾기
-3. 토글 ON (DAG 활성화)
-4. 오른쪽 ▶ (Trigger DAG) 클릭
-5. **Configuration JSON** 에 날짜 지정 없이 실행하면 어제 날짜(`ds`)가 기본값
+> ⚠️ **Airflow 2.8.1 버그 주의**
+>
+> `airflow dags trigger` CLI 또는 Web UI 트리거를 사용하면 task instance가 생성되지 않고 DAG run이 즉시 success 처리되는 버그가 있다.
+> 원인: 신규 dag_run의 `dag_hash`가 직렬화된 DAG의 해시와 동일하면 `verify_integrity()`(task instance 생성 단계)가 스킵된다.
+>
+> **반드시 아래 Python 스크립트로 트리거할 것.**
 
-**특정 날짜로 테스트 (예: 2026-02-12):**
+**특정 날짜 수동 트리거 스크립트 (예: 2026-02-12):**
+
 ```bash
 source ~/airflow-venv/bin/activate
-airflow dags trigger pothole_pipeline_spark_standalone --exec-date "2026-02-12"
-```
+python3 << 'EOF'
+from airflow.models.serialized_dag import SerializedDagModel
+from airflow.utils.state import DagRunState
+from airflow.utils.types import DagRunType
+from airflow import settings
+from datetime import datetime, timezone
 
-또는 Web UI에서 Trigger DAG → Configuration JSON에:
-```json
-{"logical_date": "2026-02-12T00:00:00+00:00"}
+# ── 실행할 날짜 지정 ──────────────────────────────
+EXEC_DATE = datetime(2026, 2, 12, tzinfo=timezone.utc)
+# ──────────────────────────────────────────────────
+
+DAG_ID = "pothole_pipeline_spark_standalone"
+session = settings.Session()
+try:
+    dag = SerializedDagModel.get_dag(dag_id=DAG_ID, session=session)
+    dr = dag.create_dagrun(
+        run_id=f"manual__{EXEC_DATE.isoformat()}",
+        execution_date=EXEC_DATE,
+        data_interval=(EXEC_DATE, EXEC_DATE),
+        state=DagRunState.QUEUED,
+        run_type=DagRunType.MANUAL,
+        external_trigger=True,
+        dag_hash=None,   # 버그 우회: None으로 설정해야 task instance가 생성됨
+        session=session,
+    )
+    session.commit()
+    print(f"트리거 완료: {dr.run_id} | state={dr.state}")
+except Exception as e:
+    print(f"ERROR: {e}")
+    session.rollback()
+finally:
+    session.close()
+EOF
 ```
 
 > `{{ ds }}`가 `2026-02-12`로 치환되어 S3 경로가 `raw-sensor-data/dt=2026-02-12/`로 설정된다.
+
+---
+
+### 10-7. 일배치(Daily Batch) 설정
+
+매일 자동으로 파이프라인을 실행하려면 아래 두 방법 중 선택한다.
+
+#### 방법 A: `schedule_interval` 변경 (권장)
+
+`airflow_service/dags/pothole_pipeline_dag.py`에서 `schedule_interval`을 변경한다.
+
+```python
+# 변경 전
+schedule_interval=None,
+
+# 변경 후 — 매일 UTC 01:00 실행 (KST 10:00)
+schedule_interval="0 1 * * *",
+```
+
+스케줄러가 직접 생성하는 dag_run은 Airflow 2.8.1 버그의 영향을 받지 않으므로 정상 동작한다.
+
+`catchup=False`이므로 설정 변경 이후 날짜부터만 실행된다.
+
+> **`{{ ds }}`는 실행일 전날** 날짜가 된다. (Airflow 관례: 2026-02-18에 실행되면 `ds = 2026-02-17`)
+> S3 입력 경로: `s3://<BUCKET>/raw-sensor-data/dt=2026-02-17/`
+
+변경 후 DAG 파일을 배치하면 스케줄러가 자동으로 인식한다.
+
+```bash
+# 스케줄러가 새 설정을 인식했는지 확인
+source ~/airflow-venv/bin/activate
+airflow dags list | grep pothole
+airflow dags next-execution pothole_pipeline_spark_standalone
+```
+
+#### 방법 B: Linux cron으로 수동 트리거 자동화
+
+`schedule_interval=None`을 유지하면서 cron으로 매일 Python 트리거 스크립트를 실행한다.
+
+```bash
+crontab -e
+```
+
+아래 내용 추가 (매일 KST 10:00 = UTC 01:00):
+
+```cron
+0 1 * * * /home/ec2-user/airflow-venv/bin/python3 /home/ec2-user/DE-Team3-LOV3/infra/airflow/trigger_dag.py >> /home/ec2-user/airflow/logs/cron_trigger.log 2>&1
+```
+
+`/home/ec2-user/DE-Team3-LOV3/infra/airflow/trigger_dag.py`:
+
+```python
+#!/usr/bin/env python3
+"""매일 전날 날짜로 DAG를 트리거하는 스크립트 (cron용)"""
+import os, sys
+sys.path.insert(0, "/home/ec2-user/airflow-venv/lib/python3.9/site-packages")
+os.environ["AIRFLOW_HOME"] = "/home/ec2-user/airflow"
+
+from airflow.models.serialized_dag import SerializedDagModel
+from airflow.utils.state import DagRunState
+from airflow.utils.types import DagRunType
+from airflow import settings
+from datetime import datetime, timezone, timedelta
+
+# 전날 날짜 (KST 기준 오늘 데이터 = 어제 UTC)
+EXEC_DATE = (datetime.now(tz=timezone.utc) - timedelta(days=1)).replace(
+    hour=0, minute=0, second=0, microsecond=0
+)
+DAG_ID = "pothole_pipeline_spark_standalone"
+
+session = settings.Session()
+try:
+    dag = SerializedDagModel.get_dag(dag_id=DAG_ID, session=session)
+    dr = dag.create_dagrun(
+        run_id=f"manual__{EXEC_DATE.isoformat()}",
+        execution_date=EXEC_DATE,
+        data_interval=(EXEC_DATE, EXEC_DATE),
+        state=DagRunState.QUEUED,
+        run_type=DagRunType.MANUAL,
+        external_trigger=True,
+        dag_hash=None,
+        session=session,
+    )
+    session.commit()
+    print(f"[{datetime.now()}] 트리거 완료: {dr.run_id}")
+except Exception as e:
+    print(f"[{datetime.now()}] ERROR: {e}")
+    session.rollback()
+    sys.exit(1)
+finally:
+    session.close()
+```
+
+```bash
+chmod +x /home/ec2-user/DE-Team3-LOV3/infra/airflow/trigger_dag.py
+```
+
+> **방법 A가 더 단순하고 안정적**이다. 방법 B는 `schedule_interval=None`을 유지해야 하는 특수한 경우에 사용한다.
 
 ### 10-4. 실행 전 사전 조건
 
