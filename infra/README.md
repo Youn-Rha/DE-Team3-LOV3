@@ -165,7 +165,30 @@ chmod 400 ~/.ssh/spark-cluster-key.pem
 
 ---
 
-## Step 2. 환경변수 설정
+## Step 2. 코드 가져오기
+
+각 EC2에 SSH 접속 후 레포지토리를 클론한다.
+
+```bash
+# git 설치 (Amazon Linux 2023)
+sudo yum install -y git
+
+# 레포 클론 + 브랜치 체크아웃
+git clone https://github.com/softeerbootcamp-7th/DE-Team3-LOV3.git
+cd DE-Team3-LOV3
+git checkout feat/spark-infra-setting
+```
+
+> 이미 클론한 경우 최신 코드를 pull 받는다.
+> ```bash
+> cd DE-Team3-LOV3
+> git checkout feat/spark-infra-setting
+> git pull origin feat/spark-infra-setting
+> ```
+
+---
+
+## Step 3. 환경변수 설정
 
 EC2 생성 후 메모한 값을 `env.sh`에 입력한다.
 
@@ -176,7 +199,7 @@ vi infra/env.sh  # 실제 IP, 인스턴스 ID 입력
 
 ---
 
-## Step 3. Spark 노드 초기 설정 (EC2-2, EC2-3, EC2-4)
+## Step 4. Spark 노드 초기 설정 (EC2-2, EC2-3, EC2-4)
 
 각 Spark 노드(Master, Worker1, Worker2)에서 실행:
 
@@ -186,7 +209,7 @@ bash infra/spark/scripts/setup_spark_node.sh
 
 설치 내용: Java 11, Spark 3.5.0, Python3, pip 패키지, S3 JAR
 
-## Step 4. SSH 키 설정 (Master → Workers)
+## Step 5. SSH 키 설정 (Master → Workers)
 
 Master 노드에서 실행:
 
@@ -200,7 +223,7 @@ ssh ec2-user@<WORKER1_IP> 'hostname'
 ssh ec2-user@<WORKER2_IP> 'hostname'
 ```
 
-## Step 5. Spark 설정 파일 배포
+## Step 6. Spark 설정 파일 배포
 
 로컬 또는 Bastion에서 실행:
 
@@ -214,7 +237,7 @@ ssh -i <KEY> ec2-user@<MASTER_IP> 'cat /opt/spark/conf/spark-env.sh'
 ssh -i <KEY> ec2-user@<MASTER_IP> 'cat /opt/spark/conf/workers'
 ```
 
-## Step 6. Spark 클러스터 테스트
+## Step 7. Spark 클러스터 테스트
 
 ```bash
 bash infra/spark/scripts/start_cluster.sh
@@ -226,7 +249,7 @@ bash infra/spark/scripts/start_cluster.sh
 bash infra/spark/scripts/stop_cluster.sh
 ```
 
-## Step 7. Airflow 설치 (EC2-1)
+## Step 8. Airflow 설치 (EC2-1)
 
 ```bash
 bash infra/airflow/setup_airflow.sh
@@ -239,13 +262,13 @@ Airflow SSH Connection 추가:
 - **Username**: `ec2-user`
 - **Extra**: `{"key_file": "<SSH_KEY_PATH>"}`
 
-## Step 8. 코드 S3 업로드
+## Step 9. 코드 S3 업로드
 
 ```bash
 bash infra/s3_deploy/upload_code_to_s3.sh
 ```
 
-## Step 9. DAG 실행
+## Step 10. DAG 실행
 
 1. `airflow_service/dags/pothole_pipeline_dag.py` 를 Airflow DAG 폴더에 배치
 2. Airflow Web UI에서 `pothole_pipeline_spark_standalone` DAG 수동 트리거
