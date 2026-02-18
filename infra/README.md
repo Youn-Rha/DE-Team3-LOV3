@@ -278,13 +278,60 @@ bash infra/s3_deploy/upload_code_to_s3.sh
 
 ## Step 10. DAG 실행
 
-1. `airflow_service/dags/pothole_pipeline_dag.py` 를 Airflow DAG 폴더에 배치
-2. Airflow Web UI에서 `pothole_pipeline_spark_standalone` DAG 수동 트리거
-3. 파이프라인 흐름: S3 입력확인 → 클러스터시작 → 코드다운로드 → Stage1 → S3확인 → Stage2 → S3확인 → 클러스터종료
+### 10-1. DAG 파일 배치
 
----
+Airflow EC2에서 DAG 파일을 Airflow DAGs 폴더에 심볼릭 링크 또는 복사한다.
 
-## DAG 파이프라인 흐름
+```bash
+# 방법 1: 심볼릭 링크 (git pull 하면 자동 반영)
+mkdir -p ~/airflow/dags                                                                                                                               
+ln -sf ~/DE-Team3-LOV3/airflow_service/dags/pothole_pipeline_dag.py ~/airflow/dags/pothole_pipeline_dag.py
+
+# 방법 2: 직접 복사
+cp ~/DE-Team3-LOV3/airflow_service/dags/pothole_pipeline_dag.py ~/airflow/dags/
+```
+
+### 10-2. DAG 인식 확인
+
+```bash
+source ~/airflow-venv/bin/activate
+airflow dags list | grep pothole
+```
+
+`pothole_pipeline_spark_standalone` 이 보이면 정상.
+
+### 10-3. 수동 트리거 (테스트)
+
+**Web UI에서:**
+1. `http://<AIRFLOW_EC2_PUBLIC_IP>:8080` 접속 → admin/admin 로그인
+2. DAGs 목록에서 `pothole_pipeline_spark_standalone` 찾기
+3. 토글 ON (DAG 활성화)
+4. 오른쪽 ▶ (Trigger DAG) 클릭
+5. **Configuration JSON** 에 날짜 지정 없이 실행하면 어제 날짜(`ds`)가 기본값
+
+**특정 날짜로 테스트 (예: 2026-02-12):**
+```bash
+source ~/airflow-venv/bin/activate
+airflow dags trigger pothole_pipeline_spark_standalone --exec-date "2026-02-12"
+```
+
+또는 Web UI에서 Trigger DAG → Configuration JSON에:
+```json
+{"logical_date": "2026-02-12T00:00:00+00:00"}
+```
+
+> `{{ ds }}`가 `2026-02-12`로 치환되어 S3 경로가 `raw-sensor-data/dt=2026-02-12/`로 설정된다.
+
+### 10-4. 실행 전 사전 조건
+
+DAG 실행 전에 아래가 준비되어 있어야 한다:
+
+- [ ] Spark 클러스터가 running 상태 (EC2 켜져 있고 `start-all.sh` 실행된 상태)
+- [ ] S3에 입력 데이터 존재: `s3://<BUCKET>/raw-sensor-data/dt=2026-02-12/`
+- [ ] S3에 코드 업로드 완료: `s3://<BUCKET>/spark-job-code/stage1/`, `stage2/`
+- [ ] Airflow SSH Connection `spark_master` 설정 완료
+
+### 10-5. DAG 파이프라인 흐름
 
 ```
 check_s3_input → start_cluster → start_spark → download_code
@@ -292,6 +339,71 @@ check_s3_input → start_cluster → start_spark → download_code
   → run_stage2 → check_s3_stage2_out
   → stop_spark → stop_cluster (trigger_rule=all_done)
 ```
+
+| Task | 설명 | 실행 위치 |
+|------|------|-----------|
+| check_s3_input | S3에 raw-sensor-data 존재 확인 | Airflow EC2 |
+| start_cluster | EC2 인스턴스 시작 (aws ec2 start-instances) | Airflow EC2 |
+| start_spark | Spark start-all.sh | SSH → Master |
+| download_code | S3에서 코드를 Master로 다운로드 | SSH → Master |
+| run_stage1 | spark-submit Stage1 (Anomaly Detection) | SSH → Master |
+| check_s3_stage1_out | Stage1 출력 S3 확인 | Airflow EC2 |
+| run_stage2 | spark-submit Stage2 (Spatial Clustering) | SSH → Master |
+| check_s3_stage2_out | Stage2 출력 S3 확인 | Airflow EC2 |
+| stop_spark | Spark stop-all.sh | SSH → Master |
+| stop_cluster | EC2 인스턴스 중지 (실패해도 실행) | Airflow EC2 |
+
+### 10-6. 모니터링
+
+- **Airflow Web UI**: DAG 실행 상태, 각 Task 로그 확인
+- **Spark Master UI**: `http://<MASTER_PUBLIC_IP>:8080` 에서 Application 실행 상태 확인
+- **Task 로그 확인**: Web UI에서 Task 클릭 → Logs 탭
+
+## 인스턴스 재시작 후 실행 가이드
+
+EC2 인스턴스를 껐다 켰을 때 다시 해야 하는 것들 정리.
+
+### Airflow EC2 (EC2-1)
+
+```bash
+# 1. venv 활성화 + 환경변수 설정
+source ~/airflow-venv/bin/activate
+export AIRFLOW_HOME=~/airflow
+
+# 2. Airflow webserver + scheduler 시작
+airflow webserver -p 8080 -D
+airflow scheduler -D
+```
+
+확인: `http://<AIRFLOW_PUBLIC_IP>:8080` 접속 가능한지
+
+> webserver/scheduler는 데몬(`-D`)으로 띄워도 인스턴스 재시작하면 죽는다. 매번 다시 실행해야 한다.
+
+### Spark Master EC2 (EC2-2)
+
+```bash
+# Spark 클러스터 시작 (Worker도 같이 시작됨)
+/opt/spark/sbin/start-all.sh
+```
+
+확인: `http://<MASTER_PUBLIC_IP>:8080` 에서 Worker 2개 연결
+
+> Worker EC2 (EC2-3, EC2-4)는 Master에서 `start-all.sh` 하면 자동 시작되므로 별도 작업 불필요.
+
+### 전체 재시작 순서
+
+1. AWS 콘솔에서 4대 모두 시작 (EC2-1 ~ EC2-4)
+2. **Spark Master**(EC2-2)에서: `/opt/spark/sbin/start-all.sh`
+3. **Airflow**(EC2-1)에서:
+   ```bash
+   source ~/airflow-venv/bin/activate
+   export AIRFLOW_HOME=~/airflow
+   airflow webserver -p 8080 -D
+   airflow scheduler -D
+   ```
+4. Web UI 접속해서 DAG 트리거
+
+---
 
 ## 비용 절감
 

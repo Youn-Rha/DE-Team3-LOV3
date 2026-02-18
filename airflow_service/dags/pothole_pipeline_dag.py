@@ -102,7 +102,7 @@ with DAG(
     start_spark = SSHOperator(
         task_id="start_spark",
         ssh_conn_id=SSH_CONN_ID,
-        command="source ~/.bashrc && /opt/spark/sbin/start-all.sh",
+        command="source ~/.bashrc && /opt/spark/sbin/start-all.sh ;",
         cmd_timeout=120,
     )
 
@@ -216,7 +216,7 @@ with DAG(
     stop_spark = SSHOperator(
         task_id="stop_spark",
         ssh_conn_id=SSH_CONN_ID,
-        command="source ~/.bashrc && /opt/spark/sbin/stop-all.sh",
+        command="source ~/.bashrc && /opt/spark/sbin/stop-all.sh ;",
         cmd_timeout=120,
         trigger_rule="all_done",
     )
