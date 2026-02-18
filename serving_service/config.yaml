@@ -11,7 +11,7 @@ app:
 
 # PostgreSQL 데이터 마트 설정
 postgres:
-  host: ${POSTGRES_HOST:-localhost}
+  host: "localhost"
   port: 5432
   user: "pothole_user"
   password: ${POSTGRES_PASSWORD}
@@ -21,14 +21,12 @@ postgres:
 # S3 설정
 # AWS credentials: EC2 IAM role 또는 ~/.aws/credentials 사용
 s3:
-  bucket: ${S3_BUCKET:-pothole-detection-results}
+  bucket: "pothole-detection-results"
   region: "ap-northeast-2"
   # stage2_output_prefix: "stage2/parquet/pothole_segments"
 
-# Superset 대시보드 설정 (선택사항)
-superset:
-  host: ${SUPERSET_HOST:-localhost}
-  port: 8088
-  username: "admin"
-  password: ${SUPERSET_ADMIN_PASSWORD}
-  database_name: "postgresql_datamart"
+# 공공데이터 포트홀 민원 API 설정
+complaint_api:
+  base_url: "https://apis.data.go.kr/1140100/minAnalsInfoView7"
+  endpoint: "/minPotholeLatLonInfo"
+  max_distance_m: 500

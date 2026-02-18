@@ -12,8 +12,8 @@ services:
       postgres
       -c shared_buffers=256MB
       -c max_connections=100
-    expose:
-      - "5432"
+    ports:
+      - "5432:5432"
     volumes:
       - /data/postgres:/var/lib/postgresql/data
       - ./sql/01_create_tables.sql:/docker-entrypoint-initdb.d/01_create_tables.sql
@@ -30,46 +30,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    networks:
-      - pothole-net
-
-  superset:
-    image: apache/superset:latest
-    container_name: pothole-superset
-    environment:
-      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
-      SUPERSET_SQLALCHEMY_DATABASE_URI: "postgresql://pothole_user:${POSTGRES_PASSWORD}@postgres:5432/road_safety"
-      SUPERSET_LOG_LEVEL: "INFO"
-      SUPERSET_CACHE_DEFAULT_TIMEOUT: 86400
-    ports:
-      - "8088:8088"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - /data/superset:/var/lib/superset
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - pothole-net
-    command: >
-      bash -c "
-      superset db upgrade &&
-      superset fab create-admin
-        --username admin
-        --firstname admin
-        --lastname admin
-        --email admin@example.com
-        --password ${SUPERSET_ADMIN_PASSWORD}
-        2>/dev/null || true &&
-      superset init &&
-      superset run -h 0.0.0.0 -p 8088
-      "
-
-networks:
-  pothole-net:
-    driver: bridge
