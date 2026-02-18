@@ -22,20 +22,21 @@ echo "[1/6] 시스템 패키지 설치 중..."
 sudo yum update -y
 sudo yum install -y python3-pip python3-devel gcc
 
-# 2. Python venv 생성
+# 2. Python venv 생성 (기존 venv가 있으면 삭제 후 재생성)
 echo "[2/6] Python venv 생성 중..."
+rm -rf "${VENV_DIR}"
 python3 -m venv "${VENV_DIR}"
 
-# 3. Airflow 설치 (venv 절대 경로 사용)
+# 3. Airflow 설치 (constraint 파일로 의존성 충돌 방지)
 echo "[3/6] Airflow 설치 중..."
 export AIRFLOW_HOME="${AIRFLOW_HOME}"
 "${VENV_PIP}" install --upgrade pip
 
 CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-"${VENV_PIP}" install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
-"${VENV_PIP}" install apache-airflow-providers-ssh
-"${VENV_PIP}" install apache-airflow-providers-amazon
-"${VENV_PIP}" install pyyaml boto3
+CONSTRAINT_FILE="/tmp/airflow-constraints.txt"
+wget -O "${CONSTRAINT_FILE}" "${CONSTRAINT_URL}"
+"${VENV_PIP}" install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_FILE}"
+"${VENV_PIP}" install apache-airflow-providers-ssh apache-airflow-providers-amazon pyyaml boto3
 
 # 4. Airflow DB 초기화
 echo "[4/6] Airflow DB 초기화 중..."
