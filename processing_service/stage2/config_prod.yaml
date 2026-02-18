@@ -1,0 +1,13 @@
+app:
+  name: "PotholeSegmentAnalyzer"
+  log_level: "INFO"
+
+input:
+  sensor_data_path: "s3a://softeer-final-porj/stage1_anomaly_detected/"
+  road_network_path: "s3a://softeer-final-porj/road-network/data/"
+
+output:
+  s3_path: "s3a://softeer-final-porj/stage2_aggregated/"
+
+processing:
+  join_broadcast_limit: 100

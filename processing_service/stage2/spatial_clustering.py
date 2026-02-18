@@ -150,5 +150,12 @@ class PotholeSegmentProcessor:
 
 
 if __name__ == "__main__":
-    processor = PotholeSegmentProcessor()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Stage 2: Spatial Clustering")
+    parser.add_argument("--config-path", default="config.yaml",
+                        help="config YAML 파일 경로 (기본: config.yaml)")
+    args = parser.parse_args()
+
+    processor = PotholeSegmentProcessor(config_path=args.config_path)
     processor.run()
