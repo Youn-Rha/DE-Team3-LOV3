@@ -1,6 +1,2 @@
-# Spark Worker 노드 목록
-# 위치: /opt/spark/conf/workers (Master 노드에만 필요)
-# NOTE: deploy_spark_configs.sh 에서 sed로 실제 IP 치환됨
-
 ${WORKER1_PRIVATE_IP}
 ${WORKER2_PRIVATE_IP}

@@ -240,15 +240,22 @@ ssh ec2-user@<WORKER1_IP> 'cat /opt/spark/conf/spark-env.sh'
 
 ## Step 7. Spark 클러스터 테스트
 
-```bash
-bash infra/spark/scripts/start_cluster.sh
-```
-
-확인: `http://<MASTER_IP>:8080` 에서 Worker 2개 연결 확인
+Master 노드에서 실행:
 
 ```bash
-bash infra/spark/scripts/stop_cluster.sh
+# Spark 클러스터 시작
+/opt/spark/sbin/start-all.sh
 ```
+
+확인: `http://<MASTER_PUBLIC_IP>:8080` 에서 Worker 2개 연결 확인
+
+```bash
+# Spark 클러스터 종료
+/opt/spark/sbin/stop-all.sh
+```
+
+> `start_cluster.sh` / `stop_cluster.sh`는 EC2 인스턴스 start/stop을 포함하므로 Airflow(EC2-1)에서 사용한다.
+> Master에서 직접 테스트할 때는 `start-all.sh` / `stop-all.sh`만 실행하면 된다.
 
 ## Step 8. Airflow 설치 (EC2-1)
 
