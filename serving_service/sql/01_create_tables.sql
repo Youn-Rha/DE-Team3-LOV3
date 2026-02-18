@@ -33,3 +33,15 @@ CREATE TABLE IF NOT EXISTS segment_address (
     centroid_lat   DOUBLE PRECISION,
     updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- pothole_complaints 테이블 (공공데이터 포트홀 민원)
+CREATE TABLE IF NOT EXISTS pothole_complaints (
+    id             SERIAL PRIMARY KEY,
+    create_dt      DATE NOT NULL,
+    event_lat      DOUBLE PRECISION NOT NULL,
+    event_lon      DOUBLE PRECISION NOT NULL,
+    nearest_s_id   VARCHAR(50),
+    distance_m     DOUBLE PRECISION,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (create_dt, event_lat, event_lon)
+);

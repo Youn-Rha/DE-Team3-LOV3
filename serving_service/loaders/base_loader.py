@@ -6,6 +6,7 @@ Base Loader - 공통 로직 (DB 연결, 로깅, 설정 로드)
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -36,12 +37,30 @@ class BaseLoader:
             logger.setLevel(logging.INFO)
         return logger
 
+    def _expand_env_vars(self, content):
+        """환경 변수 치환 (${VAR:-default} bash 문법 지원)"""
+        def replacer(match):
+            var_name = match.group(1)
+            default_val = match.group(2)  # None if no :- default
+            value = os.environ.get(var_name)
+            if value is not None:
+                return value
+            if default_val is not None:
+                return default_val
+            return match.group(0)  # leave unexpanded if no default
+
+        # Handle ${VAR:-default} and ${VAR} patterns
+        content = re.sub(r'\$\{(\w+)(?::-([^}]*))?\}', replacer, content)
+        # Handle plain $VAR patterns (no braces)
+        content = os.path.expandvars(content)
+        return content
+
     def _load_config(self, config_path):
         """YAML 설정 파일 로드 (환경 변수 치환)"""
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                # 환경 변수 치환 (${VAR_NAME} → 환경 변수 값)
-                config_content = os.path.expandvars(f.read())
+                # 환경 변수 치환 (${VAR_NAME} 및 ${VAR:-default} 지원)
+                config_content = self._expand_env_vars(f.read())
                 config = yaml.safe_load(config_content)
             self.logger.info(f"Config loaded from {config_path}")
             return config
