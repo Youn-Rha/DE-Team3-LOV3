@@ -175,6 +175,9 @@ class ComplaintLoader(BaseLoader):
         insert_sql = text("""
             INSERT INTO pothole_complaints (create_dt, event_lat, event_lon, nearest_s_id, distance_m)
             VALUES (:create_dt, :event_lat, :event_lon, :nearest_s_id, :distance_m)
+            ON CONFLICT (create_dt, event_lat, event_lon) DO UPDATE SET
+                nearest_s_id = EXCLUDED.nearest_s_id,
+                distance_m = EXCLUDED.distance_m
         """)
 
         records = df[["create_dt", "event_lat", "event_lon", "nearest_s_id", "distance_m"]].to_dict("records")
