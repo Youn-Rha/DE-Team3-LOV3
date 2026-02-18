@@ -27,6 +27,6 @@ s3:
 
 # 공공데이터 포트홀 민원 API 설정
 complaint_api:
-  base_url: "https://apis.data.go.kr/B553881/Pothole"
+  base_url: "https://apis.data.go.kr/1140100/minAnalsInfoView7"
   endpoint: "/minPotholeLatLonInfo"
   max_distance_m: 500
