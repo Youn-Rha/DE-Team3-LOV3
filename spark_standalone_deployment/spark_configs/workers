@@ -1,0 +1,6 @@
+# Spark Worker 노드 목록
+# 위치: /opt/spark/conf/workers (Master 노드에만 필요)
+# 실제 Worker Private IP로 변경
+
+172.31.10.11
+172.31.10.12
