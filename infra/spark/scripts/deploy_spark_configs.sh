@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # Spark 설정 파일 배포 스크립트
-# 로컬(또는 Bastion)에서 실행하여 Master/Worker에 설정 배포
+# Master 노드에서 실행 — 자기 자신 + Worker에 설정 배포
 # ============================================================
 
 set -e
@@ -34,25 +34,22 @@ apply_template() {
 TMP_DIR=$(mktemp -d)
 trap "rm -rf ${TMP_DIR}" EXIT
 
-# 1. Master 노드 배포
+# 1. Master 노드 (로컬에 직접 복사)
 echo "[1/2] Master (${MASTER_PRIVATE_IP}) 설정 배포 중..."
-apply_template "${CONFIGS_DIR}/spark-env.sh.master" "${TMP_DIR}/spark-env.sh"
-apply_template "${CONFIGS_DIR}/spark-defaults.conf" "${TMP_DIR}/spark-defaults.conf"
-apply_template "${CONFIGS_DIR}/workers" "${TMP_DIR}/workers"
-
-scp -i "${SSH_KEY_PATH}" "${TMP_DIR}/spark-env.sh" "${SSH_USER}@${MASTER_PRIVATE_IP}:${SPARK_CONF}/spark-env.sh"
-scp -i "${SSH_KEY_PATH}" "${TMP_DIR}/spark-defaults.conf" "${SSH_USER}@${MASTER_PRIVATE_IP}:${SPARK_CONF}/spark-defaults.conf"
-scp -i "${SSH_KEY_PATH}" "${TMP_DIR}/workers" "${SSH_USER}@${MASTER_PRIVATE_IP}:${SPARK_CONF}/workers"
+apply_template "${CONFIGS_DIR}/spark-env.sh.master" "${SPARK_CONF}/spark-env.sh"
+apply_template "${CONFIGS_DIR}/spark-defaults.conf" "${SPARK_CONF}/spark-defaults.conf"
+apply_template "${CONFIGS_DIR}/workers" "${SPARK_CONF}/workers"
 echo "  Master 배포 완료"
 
-# 2. Worker 노드 배포
+# 2. Worker 노드 (SSH로 전송)
 echo "[2/2] Worker 노드 설정 배포 중..."
 for WORKER_IP in "${WORKER1_PRIVATE_IP}" "${WORKER2_PRIVATE_IP}"; do
     echo "  → ${WORKER_IP} 배포 중..."
     apply_template "${CONFIGS_DIR}/spark-env.sh.worker" "${TMP_DIR}/spark-env.sh"
+    apply_template "${CONFIGS_DIR}/spark-defaults.conf" "${TMP_DIR}/spark-defaults.conf"
 
-    scp -i "${SSH_KEY_PATH}" "${TMP_DIR}/spark-env.sh" "${SSH_USER}@${WORKER_IP}:${SPARK_CONF}/spark-env.sh"
-    scp -i "${SSH_KEY_PATH}" "${TMP_DIR}/spark-defaults.conf" "${SSH_USER}@${WORKER_IP}:${SPARK_CONF}/spark-defaults.conf"
+    scp "${TMP_DIR}/spark-env.sh" "${SSH_USER}@${WORKER_IP}:${SPARK_CONF}/spark-env.sh"
+    scp "${TMP_DIR}/spark-defaults.conf" "${SSH_USER}@${WORKER_IP}:${SPARK_CONF}/spark-defaults.conf"
     echo "    완료"
 done
 
@@ -61,5 +58,6 @@ echo "설정 배포 완료!"
 echo "========================================="
 echo ""
 echo "검증:"
-echo "  ssh -i ${SSH_KEY_PATH} ${SSH_USER}@${MASTER_PRIVATE_IP} 'cat ${SPARK_CONF}/spark-env.sh'"
-echo "  ssh -i ${SSH_KEY_PATH} ${SSH_USER}@${MASTER_PRIVATE_IP} 'cat ${SPARK_CONF}/workers'"
+echo "  cat ${SPARK_CONF}/spark-env.sh"
+echo "  cat ${SPARK_CONF}/workers"
+echo "  ssh ${SSH_USER}@${WORKER1_PRIVATE_IP} 'cat ${SPARK_CONF}/spark-env.sh'"

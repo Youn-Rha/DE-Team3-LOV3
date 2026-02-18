@@ -225,7 +225,7 @@ ssh ec2-user@<WORKER2_IP> 'hostname'
 
 ## Step 6. Spark 설정 파일 배포
 
-로컬 또는 Bastion에서 실행:
+Master 노드에서 실행 (자기 자신 + Worker에 설정 배포):
 
 ```bash
 bash infra/spark/scripts/deploy_spark_configs.sh
@@ -233,8 +233,9 @@ bash infra/spark/scripts/deploy_spark_configs.sh
 
 검증:
 ```bash
-ssh -i <KEY> ec2-user@<MASTER_IP> 'cat /opt/spark/conf/spark-env.sh'
-ssh -i <KEY> ec2-user@<MASTER_IP> 'cat /opt/spark/conf/workers'
+cat /opt/spark/conf/spark-env.sh
+cat /opt/spark/conf/workers
+ssh ec2-user@<WORKER1_IP> 'cat /opt/spark/conf/spark-env.sh'
 ```
 
 ## Step 7. Spark 클러스터 테스트
