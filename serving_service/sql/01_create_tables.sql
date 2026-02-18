@@ -42,5 +42,6 @@ CREATE TABLE IF NOT EXISTS pothole_complaints (
     event_lon      DOUBLE PRECISION NOT NULL,
     nearest_s_id   VARCHAR(50),
     distance_m     DOUBLE PRECISION,
-    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (create_dt, event_lat, event_lon)
 );
