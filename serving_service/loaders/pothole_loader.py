@@ -300,9 +300,31 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Load Stage 2 results to PostgreSQL")
-    parser.add_argument("--s3-path", required=True, help="S3 parquet path")
+    parser.add_argument("--s3-path", help="S3 parquet path")
     parser.add_argument("--date", required=True, help="Execution date (YYYY-MM-DD)")
     parser.add_argument("--config", default="config.yaml", help="Config file path")
+    parser.add_argument("--test", action="store_true", help="테스트 모드: S3 대신 로컬 CSV 파일에서 로드")
+    parser.add_argument("--csv", help="--test 모드에서 사용할 로컬 CSV 파일 경로")
 
     args = parser.parse_args()
-    load_stage2_results(args.s3_path, args.date, args.config)
+
+    if args.test:
+        if not args.csv:
+            parser.error("--test 모드에서는 --csv 경로가 필요합니다")
+
+        loader = PotholeLoader(args.config)
+        try:
+            import pandas as pd
+            df = pd.read_csv(args.csv)
+            df["date"] = args.date
+            loader._validate_dataframe(df)
+            loader._upsert_to_postgresql(df)
+            loader.run_quality_checks()
+            loader._update_segment_addresses()
+            print(f"테스트 적재 완료: {len(df)}건")
+        finally:
+            loader.close()
+    else:
+        if not args.s3_path:
+            parser.error("--test 없이 실행할 때는 --s3-path가 필요합니다")
+        load_stage2_results(args.s3_path, args.date, args.config)

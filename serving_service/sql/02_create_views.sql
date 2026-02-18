@@ -90,3 +90,19 @@ SELECT
 FROM latest_two
 ORDER BY date DESC
 LIMIT 1;
+
+-- 4. complaint_hotspot: 민원 핫스팟 vs 센서 실측 비교
+CREATE OR REPLACE VIEW complaint_hotspot AS
+SELECT
+    c.nearest_s_id AS s_id,
+    sa.road_name,
+    sa.district,
+    COUNT(*) AS complaint_count,
+    rp.total_impacts,
+    rp.impact_ratio
+FROM pothole_complaints c
+LEFT JOIN segment_address sa ON c.nearest_s_id = sa.s_id
+LEFT JOIN repair_priority rp ON c.nearest_s_id = rp.s_id
+WHERE c.nearest_s_id IS NOT NULL
+GROUP BY c.nearest_s_id, sa.road_name, sa.district, rp.total_impacts, rp.impact_ratio
+ORDER BY complaint_count DESC;
