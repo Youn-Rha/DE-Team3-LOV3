@@ -301,6 +301,48 @@ check_s3_input → start_cluster → start_spark → download_code
 
 ---
 
+## Private IP 변경 대응
+
+EC2 인스턴스를 중지→시작하면 Private IP가 바뀔 수 있다. 이를 방지하거나 대응하는 방법:
+
+### 방법 1: 고정 Private IP 지정 (권장)
+
+인스턴스 생성 시 Private IP를 고정하면 중지→시작해도 IP가 바뀌지 않는다.
+
+- EC2 생성 → 네트워크 설정 → **고급 네트워크 구성** → **기본 IP** 에 원하는 IP 직접 입력
+- 예: Master `10.0.1.130`, Worker1 `10.0.1.191`, Worker2 `10.0.1.147`
+- 이미 생성된 인스턴스는 변경 불가 → 새로 만들거나 방법 2로 대응
+
+### 방법 2: IP 변경 시 설정 재배포
+
+인스턴스 재시작 후 Private IP가 바뀌었다면:
+
+1. AWS 콘솔에서 변경된 Private IP 확인
+
+2. Master에서 `env.sh` 업데이트
+   ```bash
+   vi infra/env.sh  # 변경된 IP로 수정
+   ```
+
+3. 설정 파일 재배포
+   ```bash
+   bash infra/spark/scripts/deploy_spark_configs.sh
+   ```
+
+4. workers 파일도 직접 확인
+   ```bash
+   cat /opt/spark/conf/workers
+   ```
+
+5. Spark 클러스터 시작
+   ```bash
+   /opt/spark/sbin/start-all.sh
+   ```
+
+> Master IP가 바뀐 경우 Worker의 `spark-env.sh`에 있는 `SPARK_MASTER_HOST`도 바뀌어야 하므로 반드시 `deploy_spark_configs.sh`를 다시 실행해야 한다.
+
+---
+
 ## Worker 노드 추가 가이드
 
 Worker를 수평 확장하고 싶을 때 아래 순서를 따른다.

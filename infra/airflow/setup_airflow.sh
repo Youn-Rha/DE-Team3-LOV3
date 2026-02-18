@@ -9,6 +9,9 @@ set -e
 AIRFLOW_VERSION="2.8.1"
 PYTHON_VERSION="$(python3 --version | cut -d ' ' -f2 | cut -d '.' -f1-2)"
 AIRFLOW_HOME="${HOME}/airflow"
+VENV_DIR="${HOME}/airflow-venv"
+VENV_PIP="${VENV_DIR}/bin/pip"
+VENV_AIRFLOW="${VENV_DIR}/bin/airflow"
 
 echo "========================================="
 echo "Airflow 설치 시작"
@@ -21,27 +24,26 @@ sudo yum install -y python3-pip python3-devel gcc
 
 # 2. Python venv 생성
 echo "[2/6] Python venv 생성 중..."
-python3 -m venv ~/airflow-venv
-source ~/airflow-venv/bin/activate
+python3 -m venv "${VENV_DIR}"
 
-# 3. Airflow 설치
+# 3. Airflow 설치 (venv 절대 경로 사용)
 echo "[3/6] Airflow 설치 중..."
 export AIRFLOW_HOME="${AIRFLOW_HOME}"
-pip install --upgrade pip
+"${VENV_PIP}" install --upgrade pip
 
 CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
-pip install apache-airflow-providers-ssh
-pip install apache-airflow-providers-amazon
-pip install pyyaml boto3
+"${VENV_PIP}" install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+"${VENV_PIP}" install apache-airflow-providers-ssh
+"${VENV_PIP}" install apache-airflow-providers-amazon
+"${VENV_PIP}" install pyyaml boto3
 
 # 4. Airflow DB 초기화
 echo "[4/6] Airflow DB 초기화 중..."
-airflow db init
+"${VENV_AIRFLOW}" db init
 
 # 5. Admin 유저 생성
 echo "[5/6] Admin 유저 생성 중..."
-airflow users create \
+"${VENV_AIRFLOW}" users create \
     --username admin \
     --firstname Admin \
     --lastname User \
