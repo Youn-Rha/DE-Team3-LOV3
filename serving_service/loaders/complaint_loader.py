@@ -118,18 +118,28 @@ class ComplaintLoader(BaseLoader):
                 self.logger.error(f"API call failed (page {page_no}): {e}")
                 break
 
-            body = data.get("response", {}).get("body", {})
+            # Support both {"response": {"body": ...}} and {"body": ...} structures
+            if "response" in data:
+                body = data["response"].get("body", {})
+            else:
+                body = data.get("body", {})
+                if not body:
+                    self.logger.warning(f"Unexpected response structure, top-level keys: {list(data.keys())}")
+
             items = body.get("items", [])
 
             if not items:
+                self.logger.warning(f"No items found. body keys: {list(body.keys()) if body else 'empty'}, totalCount: {body.get('totalCount')}")
                 break
 
-            for item in items:
+            for entry in items:
+                # API returns each element as {"item": {...}}
+                item = entry.get("item", entry)
                 try:
                     all_items.append({
-                        "create_dt": pd.to_datetime(str(item["createDt"])).date(),
-                        "event_lat": float(item["eventLat"]),
-                        "event_lon": float(item["eventLon"]),
+                        "create_dt": pd.to_datetime(str(item["create_dt"])).date(),
+                        "event_lat": float(item["event_lat"]),
+                        "event_lon": float(item["event_lon"]),
                     })
                 except (KeyError, ValueError) as e:
                     self.logger.warning(f"Skipping malformed record: {e}")
