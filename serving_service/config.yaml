@@ -11,7 +11,7 @@ app:
 
 # PostgreSQL 데이터 마트 설정
 postgres:
-  host: ${POSTGRES_HOST:-localhost}
+  host: "localhost"
   port: 5432
   user: "pothole_user"
   password: ${POSTGRES_PASSWORD}
@@ -21,7 +21,7 @@ postgres:
 # S3 설정
 # AWS credentials: EC2 IAM role 또는 ~/.aws/credentials 사용
 s3:
-  bucket: ${S3_BUCKET:-pothole-detection-results}
+  bucket: "pothole-detection-results"
   region: "ap-northeast-2"
   # stage2_output_prefix: "stage2/parquet/pothole_segments"
 
