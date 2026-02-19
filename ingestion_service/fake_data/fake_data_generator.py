@@ -62,7 +62,6 @@ def load_road_network(csv_path: str) -> dict:
     logger.info(f"도로망 로드: {len(links)}개 링크, {sum(len(v) for v in links.values())}개 세그먼트")
     return links
 
-
 def pick_route(links: dict, min_segments: int = 10, max_segments: int = 100) -> list[dict]:
     """도로망에서 랜덤 경로 선택 (producer.py 복사)"""
     target = int(random.lognormvariate(math.log(30), 0.5))
@@ -159,6 +158,7 @@ def generate_trip(
     vehicle_id: str,
     route: list[dict],
     points_per_seg: int = 10,
+    base_ts_ms: int = None,
 ) -> dict:
     """
     현실적인 주행 데이터 생성 (producer.py 기반)
@@ -178,11 +178,12 @@ def generate_trip(
     speeds = generate_speed_profile(total_points)
 
     records = []
-    ts_base = int(time.time() * 1000)
+    ts_base = base_ts_ms if base_ts_ms is not None else int(time.time() * 1000)
     ts_offset = random.randint(0, 3600) * 1000
     ts = ts_base - ts_offset
 
-    trip_id = f"TRIP-{time.strftime('%Y%m%d')}-{vehicle_id}-{int(time.time()) % 10000:04d}"
+    date_str = datetime.fromtimestamp(ts / 1000).strftime('%Y%m%d')
+    trip_id = f"TRIP-{date_str}-{vehicle_id}-{int(ts / 1000) % 10000:04d}"
 
     impact_queue = []
     point_idx = 0
@@ -288,9 +289,14 @@ def process_and_upload(trip_json: dict) -> dict:
         return {"status": "error", "error": str(e)}
 
 
-def batch_generate_and_upload(num_trips: int, links: dict):
+def batch_generate_and_upload(num_trips: int, links: dict, start_date: datetime = None, end_date: datetime = None):
     """배치로 더미 데이터 생성 및 S3 업로드"""
-    logger.info(f"생성 시작: {num_trips}개 trip (옵션 1: points_per_seg=10, ~80-120KB/trip)")
+    if start_date and end_date:
+        logger.info(f"생성 시작: {num_trips}개 trip ({start_date.date()} ~ {end_date.date()})")
+        range_ms = int((end_date - start_date).total_seconds() * 1000)
+    else:
+        logger.info(f"생성 시작: {num_trips}개 trip (옵션 1: points_per_seg=10, ~80-120KB/trip)")
+        range_ms = None
 
     success_count = 0
     skip_count = 0
@@ -302,8 +308,12 @@ def batch_generate_and_upload(num_trips: int, links: dict):
         vehicle_id = f"v{(i % 100):03d}"
         route = pick_route(links)
 
+        base_ts_ms = None
+        if start_date and range_ms:
+            base_ts_ms = int(start_date.timestamp() * 1000) + random.randint(0, range_ms)
+
         # 옵션 1: points_per_seg=10 (기본 3-8에서 10으로 증가)
-        trip_json = generate_trip(vehicle_id, route, points_per_seg=10)
+        trip_json = generate_trip(vehicle_id, route, points_per_seg=10, base_ts_ms=base_ts_ms)
 
         result = process_and_upload(trip_json)
 
@@ -348,8 +358,13 @@ if __name__ == "__main__":
         help="도로망 CSV 경로",
     )
     parser.add_argument("--test", action="store_true", help="테스트 모드 (데이터 생성만, S3 저장 X)")
+    parser.add_argument("--date", type=str, default=None, help="날짜 (YYYY-MM-DD), 미지정 시 오늘, 예: 2026-02-16")
 
     args = parser.parse_args()
+
+    target = datetime.strptime(args.date, "%Y-%m-%d") if args.date else datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date = target
+    end_date = target + timedelta(days=1)
 
     links = load_road_network(args.road_network)
 
@@ -375,4 +390,4 @@ if __name__ == "__main__":
 
     else:
         # 정상 모드: S3 업로드
-        batch_generate_and_upload(args.trips, links)
+        batch_generate_and_upload(args.trips, links, start_date, end_date)
