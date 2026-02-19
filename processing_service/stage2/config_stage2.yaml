@@ -1,5 +1,3 @@
-# EMR 전용 (입출력 경로: s3://...)
-
 storage:
   input_base_path: "s3a://softeer-7-de3-bucket/stage1_anomaly_detected"
   output_base_path: "s3a://softeer-7-de3-bucket/stage2_spatial_clustering"
