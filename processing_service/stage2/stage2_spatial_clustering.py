@@ -98,14 +98,14 @@ class PotholeSegmentProcessor:
             find_segment_udf(F.col("lon"), F.col("lat"))
         ).filter(F.col("s_id").isNotNull())
 
-    def aggregate_metrics(self, mapped_df: DataFrame) -> DataFrame:
+    def aggregate_metrics(self, mapped_df: DataFrame, batch_date: str) -> DataFrame:
         """
         세그먼트별 'impact_count' (포트홀 발생 횟수)와 'total_count' (전체 데이터 포인트 수)를 집계합니다.
         - impact_count: `is_pothole` 플래그가 true인 데이터 포인트의 수
         - total_count: 해당 세그먼트에 매핑된 모든 데이터 포인트의 수
         """
-        # 'date' 컬럼에 코드 실행 시점의 현재 날짜를 추가 (또는 파티션 날짜 사용 가능)
-        df_with_date = mapped_df.withColumn("date", F.current_date())
+        # 입력받은 batch_date를 컬럼으로 추가
+        df_with_date = mapped_df.withColumn("date", F.lit(batch_date).cast("date"))
 
         # is_pothole (Boolean)을 정수(0 또는 1)로 변환하여 합산
         return df_with_date.groupBy("s_id", "date").agg(
@@ -155,7 +155,7 @@ def run_job(
 
     # 2. 매핑 및 집계
     mapped_df = processor.map_points_to_segments(sensor_df, road_df)
-    aggregated_df = processor.aggregate_metrics(mapped_df)
+    aggregated_df = processor.aggregate_metrics(mapped_df, batch_dt)
     
     # 3. 중심점 정보 조인 및 최종 컬럼 선택
     result_df = aggregated_df.join(
@@ -198,18 +198,18 @@ def run_job(
 if __name__ == "__main__":
     import argparse
 
-    # stage2 디렉터리를 sys.path에 추가 (connection.py import용)
+    # stage2 디렉터리를 sys.path에 추가 (connection_stage2.py import용)
     _stage2_dir = os.path.dirname(os.path.abspath(__file__))
     if _stage2_dir not in sys.path:
         sys.path.insert(0, _stage2_dir)
 
-    # connection 모듈 임포트 (stage2 폴더 내 혹은 상위)
+    # connection_stage2 모듈 임포트 (stage2 폴더 내 혹은 상위)
     try:
-        from connection import load_config, get_spark_session
+        from connection_stage2 import load_config, get_spark_session
     except ImportError:
         # 상위 디렉토리에서 실행 시 처리
         sys.path.append(os.path.join(_stage2_dir, '..'))
-        from stage2.connection import load_config, get_spark_session
+        from stage2.connection_stage2 import load_config, get_spark_session
 
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
