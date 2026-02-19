@@ -20,7 +20,7 @@ from pyspark.sql.types import (
     IntegerType, LongType,
 )
 from pyspark.sql.utils import AnalysisException
-from typing import Dict, Any, Iterator
+from typing import Dict, Any, Iterator, Optional
 from datetime import date, timedelta
 import os
 import logging
@@ -55,7 +55,7 @@ def get_input_schema() -> StructType:
     ])
 
 
-def _batch_date(batch_date_str: str = None) -> str:
+def _batch_date(batch_date_str: Optional[str] = None) -> str:
     if batch_date_str and batch_date_str.strip():
         return batch_date_str.strip()
     env_date = os.getenv("BATCH_DATE", "").strip()
@@ -148,7 +148,7 @@ class AnomalyDetectionPipeline:
                 std_az = az.std()
                 nor_az = (
                     (az - az.mean()) / std_az
-                    if (std_az is not None and std_az != 0)
+                    if (pd.notna(std_az) and std_az != 0)
                     else pd.Series(0.0, index=trip_df.index)
                 )
 
@@ -156,7 +156,7 @@ class AnomalyDetectionPipeline:
                 std_gy = gy.std()
                 nor_gy = (
                     (gy - gy.mean()) / std_gy
-                    if (std_gy is not None and std_gy != 0)
+                    if (pd.notna(std_gy) and std_gy != 0)
                     else pd.Series(0.0, index=trip_df.index)
                 )
 
@@ -182,7 +182,7 @@ def run_job(
     config: Dict[str, Any],
     input_base_path: str,
     output_base_path: str,
-    batch_date: str = None,
+    batch_date: Optional[str] = None,
 ) -> None:
     """Stage 1 일 배치 실행: 입력 읽기 → 파이프라인 → 출력 저장"""
     batch_dt = _batch_date(batch_date)
@@ -243,7 +243,7 @@ if __name__ == "__main__":
     import argparse
     import sys
 
-    # stage1 디렉터리를 sys.path에 추가 (connection.py import용)
+    # stage1 디렉터리를 sys.path에 추가 (connection_stage1.py import용)
     _stage1_dir = os.path.dirname(os.path.abspath(__file__))
     if _stage1_dir not in sys.path:
         sys.path.insert(0, _stage1_dir)
