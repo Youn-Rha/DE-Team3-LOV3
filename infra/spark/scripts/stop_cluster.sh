@@ -26,7 +26,7 @@ sleep 5
 # 2. EC2 인스턴스 중지
 echo "[2/2] EC2 인스턴스 중지 중..."
 aws ec2 stop-instances \
-    --instance-ids ${MASTER_INSTANCE_ID} ${WORKER1_INSTANCE_ID} ${WORKER2_INSTANCE_ID} \
+    --instance-ids ${MASTER_INSTANCE_ID} ${WORKER1_INSTANCE_ID} ${WORKER2_INSTANCE_ID} ${WORKER3_INSTANCE_ID} ${WORKER4_INSTANCE_ID} \
     --region ${AWS_REGION}
 
 echo "========================================="

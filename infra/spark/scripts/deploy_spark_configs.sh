@@ -27,6 +27,8 @@ apply_template() {
         -e "s|\${MASTER_PRIVATE_IP}|${MASTER_PRIVATE_IP}|g" \
         -e "s|\${WORKER1_PRIVATE_IP}|${WORKER1_PRIVATE_IP}|g" \
         -e "s|\${WORKER2_PRIVATE_IP}|${WORKER2_PRIVATE_IP}|g" \
+        -e "s|\${WORKER3_PRIVATE_IP}|${WORKER3_PRIVATE_IP}|g" \
+        -e "s|\${WORKER4_PRIVATE_IP}|${WORKER4_PRIVATE_IP}|g" \
         "$src" > "$dest"
 }
 
@@ -43,7 +45,7 @@ echo "  Master 배포 완료"
 
 # 2. Worker 노드 (SSH로 전송)
 echo "[2/2] Worker 노드 설정 배포 중..."
-for WORKER_IP in "${WORKER1_PRIVATE_IP}" "${WORKER2_PRIVATE_IP}"; do
+for WORKER_IP in "${WORKER1_PRIVATE_IP}" "${WORKER2_PRIVATE_IP}" "${WORKER3_PRIVATE_IP}" "${WORKER4_PRIVATE_IP}"; do
     echo "  → ${WORKER_IP} 배포 중..."
     apply_template "${CONFIGS_DIR}/spark-env.sh.worker" "${TMP_DIR}/spark-env.sh"
     apply_template "${CONFIGS_DIR}/spark-defaults.conf" "${TMP_DIR}/spark-defaults.conf"

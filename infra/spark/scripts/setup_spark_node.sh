@@ -24,7 +24,7 @@ java -version
 echo "[3/6] Spark 다운로드 및 설치 중..."
 if [ ! -d /opt/spark ]; then
     cd /opt
-    sudo wget -q https://archive.apache.org/dist/spark/spark-3.5.0/spark-3.5.0-bin-hadoop3.tgz
+    sudo wget https://archive.apache.org/dist/spark/spark-3.5.0/spark-3.5.0-bin-hadoop3.tgz
     sudo tar -xzf spark-3.5.0-bin-hadoop3.tgz
     sudo mv spark-3.5.0-bin-hadoop3 spark
     sudo chown -R ec2-user:ec2-user /opt/spark
