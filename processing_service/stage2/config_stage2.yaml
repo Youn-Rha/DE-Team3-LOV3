@@ -1,9 +1,9 @@
 # EMR 전용 (입출력 경로: s3://...)
 
 storage:
-  input_base_path: "s3://your-bucket/stage1_anomaly_detected"
-  output_base_path: "s3://your-bucket/stage2_aggregated"
-  road_network_path: "s3://your-bucket/road-network/data/road_network_863.csv"
+  input_base_path: "s3a://softeer-7-de3-bucket/stage1_anomaly_detected"
+  output_base_path: "s3a://softeer-7-de3-bucket/stage2_spatial_clustering"
+  road_network_path: "s3a://softeer-7-de3-bucket/road-network/road_network_863.csv"
   input_partition_format: "dt=YYYY-MM-DD"
 
 spark:
