@@ -1,0 +1,25 @@
+storage:
+  input_base_path: "s3a://softeer-7-de3-bucket/stage1_anomaly_detected"
+  output_base_path: "s3a://softeer-7-de3-bucket/stage2_spatial_clustering"
+  road_network_path: "s3a://softeer-7-de3-bucket/road-network/road_network_863.csv"
+  input_partition_format: "dt=YYYY-MM-DD"
+
+spark:
+  master: null   # spark-submit 클러스터 사용
+  app_name: "Stage2-SpatialClustering"
+  partition_size_mb: 128
+  min_partition_size_mb: 128
+  shuffle_partitions: "auto"
+  coalesce_partitions: 16
+  adaptive_enabled: true
+  adaptive_coalesce_enabled: true
+  skew_join_enabled: true
+  target_file_size_mb: 256
+  join_broadcast_limit: 100
+
+spatial:
+  road_network_format: csv
+  kdtree_leaf_size: 10
+  
+logging:
+  level: INFO
