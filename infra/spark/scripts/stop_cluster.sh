@@ -19,7 +19,7 @@ echo "========================================="
 # 1. Spark 클러스터 종료
 echo "[1/2] Spark 클러스터 종료 중..."
 ssh -i "${SSH_KEY_PATH}" "${SSH_USER}@${MASTER_PRIVATE_IP}" \
-    "source ~/.bashrc && ${SPARK_HOME}/sbin/stop-all.sh" || true
+    "source ~/.bashrc && ${SPARK_HOME}/sbin/stop-history-server.sh && ${SPARK_HOME}/sbin/stop-all.sh" || true
 
 sleep 5
 

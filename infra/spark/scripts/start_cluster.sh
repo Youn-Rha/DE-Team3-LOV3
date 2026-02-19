@@ -34,7 +34,7 @@ sleep 30
 # 3. Spark 클러스터 시작 (Master에서 start-all.sh)
 echo "[3/3] Spark 클러스터 시작 중..."
 ssh -i "${SSH_KEY_PATH}" "${SSH_USER}@${MASTER_PRIVATE_IP}" \
-    "source ~/.bashrc && ${SPARK_HOME}/sbin/start-all.sh"
+    "source ~/.bashrc && ${SPARK_HOME}/sbin/start-all.sh && ${SPARK_HOME}/sbin/start-history-server.sh"
 
 echo "========================================="
 echo "클러스터 시작 완료!"
