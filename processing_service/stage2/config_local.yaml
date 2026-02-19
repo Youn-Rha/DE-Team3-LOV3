@@ -1,0 +1,27 @@
+# Local 전용 (입출력 경로: ./data/...)
+
+storage:
+  input_base_path: "data/"
+  output_base_path: "data/output"
+  road_network_path: "data/road_network_863.csv"
+  input_partition_format: "dt=YYYY-MM-DD"
+
+spark:
+  master: "local[*]"   # 로컬 실행
+  app_name: "Stage2-SpatialClustering-Local"
+  partition_size_mb: 64
+  min_partition_size_mb: 64
+  shuffle_partitions: "1" # 로컬 테스트 시 줄임
+  coalesce_partitions: 1
+  adaptive_enabled: true
+  adaptive_coalesce_enabled: true
+  skew_join_enabled: true
+  target_file_size_mb: 64
+  join_broadcast_limit: 100
+
+spatial:
+  road_network_format: csv
+  kdtree_leaf_size: 10
+  
+logging:
+  level: INFO
