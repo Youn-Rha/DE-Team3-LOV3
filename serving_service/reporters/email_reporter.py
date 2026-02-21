@@ -1,7 +1,7 @@
 """
 Email Reporter - 포트홀 일일 리포트 이메일 전송
 
-daily_kpi, worsening_alert, repair_priority 뷰에서 데이터를 조회하여
+mvw_dashboard_repair_priority, pothole_segments 테이블에서 데이터를 조회하여
 Gmail SMTP로 일일 리포트 이메일을 전송.
 """
 
@@ -31,8 +31,35 @@ class EmailReporter(BaseLoader):
             )
 
     def get_daily_kpi(self):
-        """daily_kpi 뷰에서 당일 KPI 조회"""
-        query = "SELECT date, total_impacts, active_segments, impact_change, segment_change FROM daily_kpi"
+        """당일 KPI: 탐지 건수, 활성 구간 수, 전일 대비 변화"""
+        query = """
+            WITH daily_stats AS (
+                SELECT
+                    date,
+                    SUM(impact_count) AS total_impacts,
+                    COUNT(DISTINCT s_id) AS active_segments
+                FROM pothole_segments
+                GROUP BY date
+            ),
+            latest_two AS (
+                SELECT
+                    date,
+                    total_impacts,
+                    active_segments,
+                    LAG(total_impacts) OVER (ORDER BY date) AS prev_impacts,
+                    LAG(active_segments) OVER (ORDER BY date) AS prev_segments
+                FROM daily_stats
+            )
+            SELECT
+                date,
+                total_impacts,
+                active_segments,
+                total_impacts - COALESCE(prev_impacts, 0) AS impact_change,
+                active_segments - COALESCE(prev_segments, 0) AS segment_change
+            FROM latest_two
+            ORDER BY date DESC
+            LIMIT 1
+        """
         try:
             result = self.fetch_query(query)
             if result:
@@ -50,17 +77,16 @@ class EmailReporter(BaseLoader):
             raise
 
     def get_repair_priority(self, limit=5):
-        """repair_priority 뷰 + segment_address JOIN으로 보수 우선순위 조회"""
+        """보수 우선순위 (mvw_dashboard_repair_priority MV 사용)"""
         query = f"""
             SELECT
-                rp.s_id,
-                sa.road_name,
-                rp.total_impacts,
-                rp.detected_days,
-                rp.impact_ratio
-            FROM repair_priority rp
-            LEFT JOIN segment_address sa ON rp.s_id = sa.s_id
-            ORDER BY rp.total_impacts DESC
+                s_id,
+                COALESCE(road_name, '-') AS road_name,
+                total_impacts,
+                complaint_count,
+                priority_score
+            FROM mvw_dashboard_repair_priority
+            ORDER BY priority_rank ASC
             LIMIT {limit}
         """
         try:
@@ -69,10 +95,10 @@ class EmailReporter(BaseLoader):
             for row in result:
                 segments.append({
                     "s_id": row[0],
-                    "road_name": row[1] or "-",
+                    "road_name": row[1],
                     "total_impacts": row[2],
-                    "detected_days": row[3],
-                    "impact_ratio": float(row[4]) if row[4] else 0,
+                    "complaint_count": row[3],
+                    "priority_score": float(row[4]) if row[4] else 0,
                 })
             return segments
         except Exception as e:
@@ -80,15 +106,32 @@ class EmailReporter(BaseLoader):
             raise
 
     def get_worsening_alerts(self, limit=5):
-        """worsening_alert 뷰 + segment_address JOIN으로 악화 구간 조회"""
+        """악화 구간: rolling 7일 평균 대비 150% 초과 구간"""
         query = f"""
+            WITH daily AS (
+                SELECT
+                    s_id,
+                    date,
+                    impact_count,
+                    AVG(impact_count) OVER (
+                        PARTITION BY s_id
+                        ORDER BY date
+                        ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+                    ) AS rolling_7d_avg
+                FROM pothole_segments
+            )
             SELECT
-                wa.s_id,
-                sa.road_name,
-                wa.pct_of_avg
-            FROM worsening_alert wa
-            LEFT JOIN segment_address sa ON wa.s_id = sa.s_id
-            ORDER BY wa.pct_of_avg DESC
+                d.s_id,
+                COALESCE(sa.road_name, '-') AS road_name,
+                ROUND(
+                    (d.impact_count::NUMERIC / NULLIF(d.rolling_7d_avg, 0)) * 100, 1
+                ) AS pct_of_avg
+            FROM daily d
+            LEFT JOIN segment_address sa ON d.s_id = sa.s_id
+            WHERE d.rolling_7d_avg > 0
+              AND d.impact_count > d.rolling_7d_avg * 1.5
+              AND d.date = (SELECT MAX(date) FROM pothole_segments)
+            ORDER BY pct_of_avg DESC
             LIMIT {limit}
         """
         try:
@@ -97,7 +140,7 @@ class EmailReporter(BaseLoader):
             for row in result:
                 alerts.append({
                     "s_id": row[0],
-                    "road_name": row[1] or "-",
+                    "road_name": row[1],
                     "pct_of_avg": float(row[2]),
                 })
             return alerts
@@ -186,8 +229,8 @@ class EmailReporter(BaseLoader):
                             <th style="padding: 8px; text-align: left;">#</th>
                             <th style="padding: 8px; text-align: left;">세그먼트</th>
                             <th style="padding: 8px; text-align: left;">도로명</th>
-                            <th style="padding: 8px; text-align: right;">누적 건수</th>
-                            <th style="padding: 8px; text-align: right;">탐지 일수</th>
+                            <th style="padding: 8px; text-align: right;">충격 건수</th>
+                            <th style="padding: 8px; text-align: right;">민원 건수</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -200,7 +243,7 @@ class EmailReporter(BaseLoader):
                             <td style="padding: 8px; border: 1px solid #ddd;">{seg['s_id']}</td>
                             <td style="padding: 8px; border: 1px solid #ddd;">{seg['road_name']}</td>
                             <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['total_impacts']}건</td>
-                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['detected_days']}일</td>
+                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['complaint_count']}건</td>
                         </tr>
                 """
             html += """
