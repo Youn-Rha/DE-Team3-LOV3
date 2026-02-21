@@ -5,6 +5,8 @@
 1 trip JSON → N개의 flat row dict 리스트를 반환한다.
 """
 
+from typing import Optional
+
 from config import VALID_RANGE
 
 
@@ -31,7 +33,7 @@ def parse_trip(raw: dict) -> tuple[str, str, str, list[dict]]:
     return trip_id, vehicle_id, date, rows
 
 
-def _parse_record(record: dict, trip_id: str, vehicle_id: str) -> dict | None:
+def _parse_record(record: dict, trip_id: str, vehicle_id: str) -> Optional[dict]:
     """단일 record를 flat row로 변환한다.
 
     필수 필드가 누락되거나 유효 범위를 벗어나면 None을 반환한다.
