@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Spark Worker 노드용 환경 변수 설정
+# 위치: /opt/spark/conf/spark-env.sh
+# NOTE: ${MASTER_PRIVATE_IP} 는 deploy_spark_configs.sh 에서 sed로 치환됨
+
+# Master 정보
+export SPARK_MASTER_HOST=${MASTER_PRIVATE_IP}
+export SPARK_MASTER_PORT=7077
+
+# Worker 리소스 설정
+export SPARK_WORKER_CORES=2
+export SPARK_WORKER_MEMORY=6g
+export SPARK_WORKER_PORT=7078
+export SPARK_WORKER_WEBUI_PORT=8081
+
+# Java 경로
+export JAVA_HOME=/usr/lib/jvm/java-11-amazon-corretto
+
+# Python 경로
+export PYSPARK_PYTHON=python3
+export PYSPARK_DRIVER_PYTHON=python3
+
+# 로그 설정
+export SPARK_LOG_DIR=/opt/spark/logs
+export SPARK_PID_DIR=/opt/spark/run
