@@ -36,6 +36,7 @@ derby.log
 .env
 .env.*
 **/.env
+.streamlit/
 
 **/data/
 
