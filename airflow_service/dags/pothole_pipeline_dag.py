@@ -4,26 +4,28 @@ Spark Standalone 클러스터 기반 포트홀 탐지 파이프라인 DAG
 파이프라인 흐름:
   1. check_s3_input       — S3에 raw-sensor-data 존재 확인
   2. start_cluster        — EC2 인스턴스 시작 (Master + Worker x4)
-  3. start_spark          — Spark 클러스터 start-all.sh
+  3. start_spark          — Spark workers 파일 갱신 + start-all.sh
   4. download_code        — S3 → Spark Master /tmp/spark-job/ 코드 다운로드
-  5. install_deps         — Master + Worker 전체에 Python 패키지 설치 (pyarrow 등)
+  5. install_deps         — Master + Worker 전체에 pyarrow 설치
   6. run_stage1           — spark-submit: Stage1 Anomaly Detection
   7. check_s3_stage1_out  — Stage1 출력 S3 존재 확인
   8. run_stage2           — spark-submit: Stage2 Spatial Clustering
   9. check_s3_stage2_out  — Stage2 출력 S3 존재 확인
- 10. stop_spark           — Spark stop-all.sh  (trigger_rule=all_done)
- 11. stop_cluster         — EC2 인스턴스 중지  (trigger_rule=all_done)
+ 10. load_to_rdb          — S3 Parquet → PostgreSQL 적재 (serving EC2)
+ 11. refresh_views        — Materialized View 갱신
+ 12. send_email_report    — 일일 이메일 리포트 전송
+ 13. stop_spark           — Spark stop-all.sh  (trigger_rule=all_done)
+ 14. stop_cluster         — EC2 인스턴스 중지  (trigger_rule=all_done)
 
-환경변수 (Airflow EC2 ~/.bashrc 또는 Airflow 환경에 설정 필요):
-  MASTER_INSTANCE_ID, WORKER1~4_INSTANCE_ID
-  MASTER_PRIVATE_IP, AWS_REGION, S3_BUCKET
-
-새 Stage 추가 방법:
-  → airflow_service/dags/dag_utils.py 주석 참조
+환경변수 (Airflow EC2 ~/.bashrc):
+  MASTER_INSTANCE_ID, WORKER1~4_INSTANCE_ID, MASTER_PRIVATE_IP, WORKER1~4_PRIVATE_IP
+  AWS_REGION, S3_BUCKET, SLACK_WEBHOOK_URL (선택)
 """
 
+import json
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.request import Request, urlopen
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
@@ -56,6 +58,51 @@ SPARK_MASTER_URI = f"spark://{MASTER_PRIVATE_IP}:7077"
 JOB_DIR          = "/tmp/spark-job"
 SSH_CONN_ID      = "spark_master"
 
+# Serving EC2 (PostgreSQL + email)
+SERVING_SSH_CONN_ID = "serving_server"
+SERVING_DIR         = "/home/ec2-user/DE-Team3-LOV3/serving_service"
+SERVING_VENV        = f"{SERVING_DIR}/venv"
+
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
+
+ALL_INSTANCE_IDS = (
+    f"{MASTER_INSTANCE_ID} {WORKER1_INSTANCE_ID} {WORKER2_INSTANCE_ID} "
+    f"{WORKER3_INSTANCE_ID} {WORKER4_INSTANCE_ID}"
+)
+
+
+# ============================================================
+# Slack 장애 알림 콜백
+# ============================================================
+def slack_failure_callback(context):
+    """Task 실패 시 Slack Incoming Webhook으로 알림 전송"""
+    if not SLACK_WEBHOOK_URL:
+        return
+
+    ti = context.get("task_instance")
+    exception = context.get("exception", "")
+
+    payload = {
+        "text": (
+            f":red_circle: *Airflow Task 실패*\n"
+            f"*DAG:* `{ti.dag_id}`\n"
+            f"*Task:* `{ti.task_id}`\n"
+            f"*Date:* `{context.get('execution_date')}`\n"
+            f"*Error:* `{str(exception)[:300]}`"
+        )
+    }
+
+    try:
+        req = Request(
+            SLACK_WEBHOOK_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        urlopen(req, timeout=10)
+    except Exception:
+        pass  # Slack 알림 실패로 파이프라인 중단하지 않음
+
+
 # ============================================================
 # DAG 정의
 # ============================================================
@@ -66,13 +113,14 @@ default_args = {
     "email_on_retry": False,
     "retries": 1,
     "retry_delay": timedelta(minutes=3),
+    "on_failure_callback": slack_failure_callback,
 }
 
 with DAG(
     dag_id="pothole_pipeline_spark_standalone",
     default_args=default_args,
-    description="Spark Standalone 클러스터로 포트홀 탐지 파이프라인 (Stage1 + Stage2)",
-    schedule_interval=None,
+    description="포트홀 탐지 파이프라인: Spark 처리 → RDB 적재 → MV 갱신 → 이메일 리포트",
+    schedule_interval="0 17 * * *",  # 매일 02:00 KST (= 17:00 UTC)
     start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
     catchup=False,
     max_active_runs=1,
@@ -97,12 +145,12 @@ with DAG(
         bash_command=f"""
         echo "EC2 인스턴스 시작 중..."
         aws ec2 start-instances \
-            --instance-ids {MASTER_INSTANCE_ID} {WORKER1_INSTANCE_ID} {WORKER2_INSTANCE_ID} {WORKER3_INSTANCE_ID} {WORKER4_INSTANCE_ID} \
+            --instance-ids {ALL_INSTANCE_IDS} \
             --region {AWS_REGION}
 
         echo "인스턴스 running 대기 중..."
         aws ec2 wait instance-running \
-            --instance-ids {MASTER_INSTANCE_ID} {WORKER1_INSTANCE_ID} {WORKER2_INSTANCE_ID} {WORKER3_INSTANCE_ID} {WORKER4_INSTANCE_ID} \
+            --instance-ids {ALL_INSTANCE_IDS} \
             --region {AWS_REGION}
 
         echo "30초 네트워크 안정화 대기..."
@@ -111,7 +159,7 @@ with DAG(
     )
 
     # --------------------------------------------------------
-    # 3. Spark 클러스터 시작
+    # 3. Spark 클러스터 시작 (workers 파일 자동 갱신)
     # --------------------------------------------------------
     start_spark = SSHOperator(
         task_id="start_spark",
@@ -153,7 +201,6 @@ EOF
 
     # --------------------------------------------------------
     # 5. Python 의존성 설치 (Master + 모든 Worker)
-    #    mapInPandas 등 PyArrow 기반 PySpark API 사용에 필요
     # --------------------------------------------------------
     install_deps = SSHOperator(
         task_id="install_deps",
@@ -174,8 +221,6 @@ EOF
 
     # --------------------------------------------------------
     # 6. Stage1 — Anomaly Detection
-    #    processing_service/stage1/stage1_anomaly_detection.py
-    #    --env stage1  →  config_stage1.yaml 사용
     # --------------------------------------------------------
     run_stage1 = SSHOperator(
         task_id="run_stage1",
@@ -194,7 +239,7 @@ EOF
     )
 
     # --------------------------------------------------------
-    # 6. Stage1 출력 확인
+    # 7. Stage1 출력 확인
     # --------------------------------------------------------
     check_s3_stage1_out = BashOperator(
         task_id="check_s3_stage1_out",
@@ -204,9 +249,7 @@ EOF
     )
 
     # --------------------------------------------------------
-    # 7. Stage2 — Spatial Clustering
-    #    processing_service/stage2/stage2_spatial_clustering.py
-    #    --env stage2  →  config_stage2.yaml 사용
+    # 8. Stage2 — Spatial Clustering
     # --------------------------------------------------------
     run_stage2 = SSHOperator(
         task_id="run_stage2",
@@ -225,7 +268,7 @@ EOF
     )
 
     # --------------------------------------------------------
-    # 8. Stage2 출력 확인
+    # 9. Stage2 출력 확인
     # --------------------------------------------------------
     check_s3_stage2_out = BashOperator(
         task_id="check_s3_stage2_out",
@@ -235,7 +278,61 @@ EOF
     )
 
     # --------------------------------------------------------
-    # 9-10. Spark + EC2 종료 (성공/실패 무관하게 항상 실행)
+    # 10. Stage2 결과 → PostgreSQL RDB 적재 (serving EC2)
+    # --------------------------------------------------------
+    load_to_rdb = SSHOperator(
+        task_id="load_to_rdb",
+        ssh_conn_id=SERVING_SSH_CONN_ID,
+        command=f"""
+        set -a && source {SERVING_DIR}/.env && set +a
+        source {SERVING_VENV}/bin/activate
+        cd {SERVING_DIR}
+        python -m loaders.pothole_loader \
+            --s3-path "s3://{S3_BUCKET}/{S3_STAGE2_OUTPUT_PREFIX}/dt={{{{ ds }}}}/" \
+            --date "{{{{ ds }}}}" \
+            --config config.yaml
+        """,
+        cmd_timeout=600,
+    )
+
+    # --------------------------------------------------------
+    # 11. Materialized View 갱신
+    # --------------------------------------------------------
+    refresh_views = SSHOperator(
+        task_id="refresh_views",
+        ssh_conn_id=SERVING_SSH_CONN_ID,
+        command=f"""
+        set -a && source {SERVING_DIR}/.env && set +a
+        docker exec pothole-postgres psql -U pothole_user -d road_safety -c "
+            REFRESH MATERIALIZED VIEW CONCURRENTLY mvw_dashboard_heatmap;
+            REFRESH MATERIALIZED VIEW CONCURRENTLY mvw_dashboard_weekly_stats;
+            REFRESH MATERIALIZED VIEW CONCURRENTLY mvw_dashboard_repair_priority;
+        "
+        echo "=== Materialized View 갱신 완료 ==="
+        """,
+        cmd_timeout=300,
+    )
+
+    # --------------------------------------------------------
+    # 12. 일일 이메일 리포트 전송
+    # --------------------------------------------------------
+    send_email_report = SSHOperator(
+        task_id="send_email_report",
+        ssh_conn_id=SERVING_SSH_CONN_ID,
+        command=f"""
+        set -a && source {SERVING_DIR}/.env && set +a
+        source {SERVING_VENV}/bin/activate
+        cd {SERVING_DIR}
+        python -m reporters.email_reporter \
+            --email "$REPORT_EMAIL" \
+            --date "{{{{ ds }}}}" \
+            --config config.yaml
+        """,
+        cmd_timeout=120,
+    )
+
+    # --------------------------------------------------------
+    # 13-14. Spark + EC2 종료 (성공/실패 무관하게 항상 실행)
     # --------------------------------------------------------
     stop_spark = SSHOperator(
         task_id="stop_spark",
@@ -251,7 +348,7 @@ EOF
         echo "EC2 인스턴스 중지 중..."
         sleep 5
         aws ec2 stop-instances \
-            --instance-ids {MASTER_INSTANCE_ID} {WORKER1_INSTANCE_ID} {WORKER2_INSTANCE_ID} {WORKER3_INSTANCE_ID} {WORKER4_INSTANCE_ID} \
+            --instance-ids {ALL_INSTANCE_IDS} \
             --region {AWS_REGION}
         echo "EC2 인스턴스 중지 완료 (비용 절감)"
         """,
@@ -264,4 +361,5 @@ EOF
     check_s3_input >> start_cluster >> start_spark >> download_code
     download_code >> install_deps >> run_stage1 >> check_s3_stage1_out
     check_s3_stage1_out >> run_stage2 >> check_s3_stage2_out
-    check_s3_stage2_out >> stop_spark >> stop_cluster
+    check_s3_stage2_out >> load_to_rdb >> refresh_views >> send_email_report
+    send_email_report >> stop_spark >> stop_cluster

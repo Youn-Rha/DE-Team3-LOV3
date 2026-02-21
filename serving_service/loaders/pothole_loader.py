@@ -6,6 +6,7 @@ PostgreSQL pothole_segments 테이블에 UPSERT하는 모듈.
 """
 
 import os
+from io import BytesIO
 
 import boto3
 import pandas as pd
@@ -53,7 +54,7 @@ class PotholeLoader(BaseLoader):
             for parquet_key in parquet_files:
                 self.logger.info(f"Reading parquet file: s3://{bucket}/{parquet_key}")
                 obj = s3_client.get_object(Bucket=bucket, Key=parquet_key)
-                df_part = pd.read_parquet(obj['Body'])
+                df_part = pd.read_parquet(BytesIO(obj['Body'].read()))
                 df_list.append(df_part)
 
             if not df_list:
