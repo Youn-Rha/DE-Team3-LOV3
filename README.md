@@ -52,8 +52,8 @@
 
 | 단계 | 설명 |
 | --- | --- |
-| **센서 데이터 수집** | 차량 가속도(Z축), 자이로스코프, GPS 데이터를 결합하여 ‘충격 이벤트’ 상시 수집 |
-| **분산 처리 (Spark)** | 대용량 센서 데이터를 50m 단위 세그먼트(`s_id`)별로 그룹화하여 이상치 판별 |
+| **이상 탐지 (Stage1)** | 차량 센서 데이터에서 Z축 가속도 기반 충격 이벤트를 판별 |
+| **공간 클러스터링 (Stage2)** | 50m 단위 세그먼트(`s_id`)별로 그룹화하여 포트홀 구간 집계 |
 | **우선순위 산정** | 충격 강도 + 발생 빈도 + 도로 등급을 결합한 스코어링 시스템 |
 
 ### 결과물
@@ -97,6 +97,7 @@
 
 | 모듈 | 역할 |
 | --- | --- |
+| [**ingestion_service**](./ingestion_service/README.md) | 863호선 가상 센서 데이터 생성 및 S3 적재 (Parquet) |
 | [**road_network_builder**](./road_network_builder/README.md) | 863호선 도로망 50m 세그먼트 분할 + 도로 위험도 등급 산출 |
 | [**processing_service**](./processing_service/README.md) | Spark 2단계 배치 처리 (이상탐지 → 공간 클러스터링) |
 | [**serving_service**](./serving_service/README.md) | S3 → PostgreSQL 적재, MV 기반 대시보드, 우선순위 스코어링 |
