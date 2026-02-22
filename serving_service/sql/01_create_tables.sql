@@ -45,3 +45,17 @@ CREATE TABLE IF NOT EXISTS pothole_complaints (
     created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (create_dt, event_lat, event_lon)
 );
+
+-- segment_road_grade 테이블 (도로 등급)
+CREATE TABLE IF NOT EXISTS segment_road_grade (
+    s_id         VARCHAR(50) PRIMARY KEY,
+    link_id      VARCHAR(50) NOT NULL,
+    road_grade   INTEGER NOT NULL  -- 1~5, 높을수록 가중치 높음
+);
+
+-- segment_repair_status 테이블 (피드백 루프용)
+CREATE TABLE IF NOT EXISTS segment_repair_status (
+    s_id            VARCHAR(50) PRIMARY KEY,
+    repair_status   VARCHAR(20) DEFAULT '미보수',  -- 미보수/보수중/보수완료
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

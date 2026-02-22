@@ -37,6 +37,9 @@ derby.log
 .env.*
 **/.env
 
+# Streamlit secrets
+**/.streamlit/secrets.toml
+
 **/data/
 
 # 테스트/커버리지

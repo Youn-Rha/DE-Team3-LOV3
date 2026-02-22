@@ -1,7 +1,7 @@
 """
 Email Reporter - 포트홀 일일 리포트 이메일 전송
 
-daily_kpi, worsening_alert, repair_priority 뷰에서 데이터를 조회하여
+mvw_dashboard_repair_priority, pothole_segments 테이블에서 데이터를 조회하여
 Gmail SMTP로 일일 리포트 이메일을 전송.
 """
 
@@ -31,8 +31,35 @@ class EmailReporter(BaseLoader):
             )
 
     def get_daily_kpi(self):
-        """daily_kpi 뷰에서 당일 KPI 조회"""
-        query = "SELECT date, total_impacts, active_segments, impact_change, segment_change FROM daily_kpi"
+        """당일 KPI: 탐지 건수, 활성 구간 수, 전일 대비 변화"""
+        query = """
+            WITH daily_stats AS (
+                SELECT
+                    date,
+                    SUM(impact_count) AS total_impacts,
+                    COUNT(DISTINCT s_id) AS active_segments
+                FROM pothole_segments
+                GROUP BY date
+            ),
+            latest_two AS (
+                SELECT
+                    date,
+                    total_impacts,
+                    active_segments,
+                    LAG(total_impacts) OVER (ORDER BY date) AS prev_impacts,
+                    LAG(active_segments) OVER (ORDER BY date) AS prev_segments
+                FROM daily_stats
+            )
+            SELECT
+                date,
+                total_impacts,
+                active_segments,
+                total_impacts - COALESCE(prev_impacts, 0) AS impact_change,
+                active_segments - COALESCE(prev_segments, 0) AS segment_change
+            FROM latest_two
+            ORDER BY date DESC
+            LIMIT 1
+        """
         try:
             result = self.fetch_query(query)
             if result:
@@ -50,29 +77,35 @@ class EmailReporter(BaseLoader):
             raise
 
     def get_repair_priority(self, limit=5):
-        """repair_priority 뷰 + segment_address JOIN으로 보수 우선순위 조회"""
+        """보수 우선순위 (mvw_dashboard_repair_priority MV 사용)"""
         query = f"""
             SELECT
-                rp.s_id,
-                sa.road_name,
-                rp.total_impacts,
-                rp.detected_days,
-                rp.impact_ratio
-            FROM repair_priority rp
-            LEFT JOIN segment_address sa ON rp.s_id = sa.s_id
-            ORDER BY rp.total_impacts DESC
+                priority_rank,
+                COALESCE(road_name, '-') AS road_name,
+                COALESCE(district, '-') AS district,
+                priority_score,
+                complaint_count,
+                centroid_lat,
+                centroid_lon
+            FROM mvw_dashboard_repair_priority
+            ORDER BY priority_rank ASC
             LIMIT {limit}
         """
         try:
             result = self.fetch_query(query)
             segments = []
             for row in result:
+                lat = round(row[5], 4) if row[5] else None
+                lon = round(row[6], 4) if row[6] else None
+                road_name = row[1]
+                if lat and lon:
+                    road_name = f"{road_name}({lat}, {lon})"
                 segments.append({
-                    "s_id": row[0],
-                    "road_name": row[1] or "-",
-                    "total_impacts": row[2],
-                    "detected_days": row[3],
-                    "impact_ratio": float(row[4]) if row[4] else 0,
+                    "priority_rank": row[0],
+                    "road_name": road_name,
+                    "district": row[2],
+                    "priority_score": float(row[3]) if row[3] else 0,
+                    "complaint_count": row[4],
                 })
             return segments
         except Exception as e:
@@ -80,15 +113,32 @@ class EmailReporter(BaseLoader):
             raise
 
     def get_worsening_alerts(self, limit=5):
-        """worsening_alert 뷰 + segment_address JOIN으로 악화 구간 조회"""
+        """악화 구간: rolling 7일 평균 대비 150% 초과 구간"""
         query = f"""
+            WITH daily AS (
+                SELECT
+                    s_id,
+                    date,
+                    impact_count,
+                    AVG(impact_count) OVER (
+                        PARTITION BY s_id
+                        ORDER BY date
+                        ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+                    ) AS rolling_7d_avg
+                FROM pothole_segments
+            )
             SELECT
-                wa.s_id,
-                sa.road_name,
-                wa.pct_of_avg
-            FROM worsening_alert wa
-            LEFT JOIN segment_address sa ON wa.s_id = sa.s_id
-            ORDER BY wa.pct_of_avg DESC
+                d.s_id,
+                COALESCE(sa.road_name, '-') AS road_name,
+                ROUND(
+                    (d.impact_count::NUMERIC / NULLIF(d.rolling_7d_avg, 0)) * 100, 1
+                ) AS pct_of_avg
+            FROM daily d
+            LEFT JOIN segment_address sa ON d.s_id = sa.s_id
+            WHERE d.rolling_7d_avg > 0
+              AND d.impact_count > d.rolling_7d_avg * 1.5
+              AND d.date = (SELECT MAX(date) FROM pothole_segments)
+            ORDER BY pct_of_avg DESC
             LIMIT {limit}
         """
         try:
@@ -97,7 +147,7 @@ class EmailReporter(BaseLoader):
             for row in result:
                 alerts.append({
                     "s_id": row[0],
-                    "road_name": row[1] or "-",
+                    "road_name": row[1],
                     "pct_of_avg": float(row[2]),
                 })
             return alerts
@@ -110,103 +160,46 @@ class EmailReporter(BaseLoader):
         if date is None:
             date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-        kpi = self.get_daily_kpi()
-        alerts = self.get_worsening_alerts(limit=5)
         priority = self.get_repair_priority(limit=5)
 
-        if not kpi:
+        if not priority:
             return f"<p>No data available for {date}</p>"
-
-        # 변화량 부호 표시
-        def sign(val):
-            return f"+{val}" if val > 0 else str(val)
 
         html = f"""
         <html>
             <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h2>포트홀 일일 리포트 ({kpi['date']})</h2>
+                <h2>포트홀 보수 우선순위 리포트 ({date})</h2>
                 <hr style="border: none; border-top: 2px solid #007bff;">
 
-                <h3>Daily KPI</h3>
-                <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-                    <tr style="background-color: #f8f9fa;">
-                        <td style="padding: 10px; border: 1px solid #ddd;"><strong>탐지 건수</strong></td>
-                        <td style="padding: 10px; border: 1px solid #ddd; font-size: 18px;">
-                            <strong>{kpi['total_impacts']}</strong>건
-                            (전일 대비 {sign(kpi['impact_change'])})
-                        </td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 10px; border: 1px solid #ddd;"><strong>활성 구간</strong></td>
-                        <td style="padding: 10px; border: 1px solid #ddd; font-size: 18px;">
-                            <strong>{kpi['active_segments']}</strong>개
-                            (전일 대비 {sign(kpi['segment_change'])})
-                        </td>
-                    </tr>
-                </table>
-        """
-
-        # 악화 구간
-        if alerts:
-            html += """
-                <h3>악화 구간</h3>
-                <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-                    <thead style="background-color: #dc3545; color: white;">
-                        <tr>
-                            <th style="padding: 8px; text-align: left;">#</th>
-                            <th style="padding: 8px; text-align: left;">세그먼트</th>
-                            <th style="padding: 8px; text-align: left;">도로명</th>
-                            <th style="padding: 8px; text-align: right;">7일 평균 대비</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            """
-            for i, a in enumerate(alerts, 1):
-                row_color = "#ffffff" if i % 2 == 1 else "#f8f9fa"
-                html += f"""
-                        <tr style="background-color: {row_color};">
-                            <td style="padding: 8px; border: 1px solid #ddd;">{i}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">{a['s_id']}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">{a['road_name']}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">+{a['pct_of_avg']:.0f}%</td>
-                        </tr>
-                """
-            html += """
-                    </tbody>
-                </table>
-            """
-
-        # 보수 우선순위
-        if priority:
-            html += """
                 <h3>보수 우선순위 TOP 5</h3>
                 <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
                     <thead style="background-color: #007bff; color: white;">
                         <tr>
-                            <th style="padding: 8px; text-align: left;">#</th>
-                            <th style="padding: 8px; text-align: left;">세그먼트</th>
+                            <th style="padding: 8px; text-align: left;">순위</th>
                             <th style="padding: 8px; text-align: left;">도로명</th>
-                            <th style="padding: 8px; text-align: right;">누적 건수</th>
-                            <th style="padding: 8px; text-align: right;">탐지 일수</th>
+                            <th style="padding: 8px; text-align: left;">관할 구역</th>
+                            <th style="padding: 8px; text-align: right;">위험 점수</th>
+                            <th style="padding: 8px; text-align: right;">민원</th>
                         </tr>
                     </thead>
                     <tbody>
-            """
-            for i, seg in enumerate(priority, 1):
-                row_color = "#ffffff" if i % 2 == 1 else "#f8f9fa"
-                html += f"""
+        """
+        for i, seg in enumerate(priority, 1):
+            row_color = "#ffffff" if i % 2 == 1 else "#f8f9fa"
+            html += f"""
                         <tr style="background-color: {row_color};">
-                            <td style="padding: 8px; border: 1px solid #ddd;">{i}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">{seg['s_id']}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">{seg['priority_rank']}</td>
                             <td style="padding: 8px; border: 1px solid #ddd;">{seg['road_name']}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['total_impacts']}건</td>
-                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['detected_days']}일</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">{seg['district']}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['priority_score']:.1f}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['complaint_count']}건</td>
                         </tr>
-                """
-            html += """
+            """
+        html += """
                     </tbody>
                 </table>
-            """
+
+        """
 
         html += """
                 <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
