@@ -1,18 +1,15 @@
 """
-더미 센서 데이터 생성 및 S3 적재 (producer.py 기반)
+더미 센서 데이터 생성 및 S3 적재
 
-producer.py의 generate_trip 로직을 재사용하되,
-Kinesis 대신 S3에 parquet으로 저장한다.
+863호선 도로망 위에서 가상 차량 주행 데이터를 생성하고,
+파싱 → 필터링 → Parquet 변환 → S3 업로드를 수행한다.
 
-Lambda와 동일한 파이프라인:
-  generate_trip → parser → filter → writer (S3)
-
-옵션 1 적용: records 수 증가 (100 → 1,000)로 빠른 배치 처리
-  한 trip: 80-120 KB
-  필요: 50,000 trips
-  시간: ~14시간 (하루 안에 5GB 적재)
+merge_size개 trip의 row를 모아 하나의 Parquet 파일로 병합 저장하여
+S3 small file 문제를 방지한다.
 """
 
+import io
+import os
 import sys
 import json
 import time
@@ -22,29 +19,158 @@ import random
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta
+from typing import Optional
 
-# producer.py의 로직 임포트 (같은 디렉토리에 있다고 가정)
-sys.path.insert(0, str(Path(__file__).parent.parent / "producer"))
+import boto3
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-# Lambda 모듈 임포트 (파싱 + 필터링 + S3 저장)
-sys.path.insert(0, str(Path(__file__).parent.parent / "lambda"))
-from parser import parse_trip
-from filter import filter_by_bbox
-from writer import write_to_s3
+# ============================================================
+# 설정
+# ============================================================
+S3_BUCKET = os.environ.get("S3_BUCKET")
+S3_PREFIX = os.environ.get("S3_PREFIX", "raw-sensor-data")
 
-# producer 설정 (일부 복사)
+# 대상 도로 bounding box
+BBOXES = {
+    "863": {
+        "min_lon": 127.52, "max_lon": 127.78,
+        "min_lat": 34.50, "max_lat": 35.07,
+    },
+}
+
+# 데이터 유효 범위 (대한민국)
+VALID_RANGE = {
+    "lon": (124.0, 132.0),
+    "lat": (33.0, 43.0),
+    "spd": (0.0, 300.0),
+    "acc": (-100.0, 100.0),
+    "gyr": (-2000.0, 2000.0),
+}
+
+# Parquet 스키마
+SCHEMA = pa.schema([
+    ("timestamp", pa.int64()),
+    ("trip_id", pa.string()),
+    ("vehicle_id", pa.string()),
+    ("accel_x", pa.float64()),
+    ("accel_y", pa.float64()),
+    ("accel_z", pa.float64()),
+    ("gyro_x", pa.float64()),
+    ("gyro_y", pa.float64()),
+    ("gyro_z", pa.float64()),
+    ("velocity", pa.float64()),
+    ("lon", pa.float64()),
+    ("lat", pa.float64()),
+    ("hdop", pa.float64()),
+    ("satellites", pa.int32()),
+])
+
 SAMPLING_INTERVAL_MS = 100
 DEVICE_PROFILES = {
     "OBD2": {"acc_noise": 0.3, "gyr_noise": 0.08, "gps_noise": 0.00008},
     "DTG": {"acc_noise": 0.5, "gyr_noise": 0.12, "gps_noise": 0.00012},
 }
 
+s3 = boto3.client("s3")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
 
 
+# ============================================================
+# 파싱 (lambda/parser.py 인라인)
+# ============================================================
+def parse_trip(raw: dict) -> tuple[str, str, str, list[dict]]:
+    """trip JSON을 메타데이터와 parsed rows로 분리한다."""
+    trip_id = raw["trip_id"]
+    vehicle_id = raw["vin"]
+    date = raw["start_time"][:10]
+
+    rows = []
+    for record in raw.get("records", []):
+        parsed = _parse_record(record, trip_id, vehicle_id)
+        if parsed is not None:
+            rows.append(parsed)
+
+    return trip_id, vehicle_id, date, rows
+
+
+def _parse_record(record: dict, trip_id: str, vehicle_id: str) -> Optional[dict]:
+    """단일 record를 flat row로 변환한다."""
+    try:
+        acc = record["acc"]
+        gyr = record["gyr"]
+        gps = record["gps"]
+
+        row = {
+            "timestamp": record["ts"],
+            "trip_id": trip_id,
+            "vehicle_id": vehicle_id,
+            "accel_x": float(acc[0]),
+            "accel_y": float(acc[1]),
+            "accel_z": float(acc[2]),
+            "gyro_x": float(gyr[0]),
+            "gyro_y": float(gyr[1]),
+            "gyro_z": float(gyr[2]),
+            "velocity": float(record.get("spd", 0)),
+            "lon": float(gps["lng"]),
+            "lat": float(gps["lat"]),
+            "hdop": float(gps.get("hdop", 99.0)),
+            "satellites": int(gps.get("sat", 0)),
+        }
+
+        if not _is_valid(row):
+            return None
+        return row
+
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def _is_valid(row: dict) -> bool:
+    """row의 값이 유효 범위 안에 있는지 확인한다."""
+    lon_min, lon_max = VALID_RANGE["lon"]
+    lat_min, lat_max = VALID_RANGE["lat"]
+    spd_min, spd_max = VALID_RANGE["spd"]
+    acc_min, acc_max = VALID_RANGE["acc"]
+    gyr_min, gyr_max = VALID_RANGE["gyr"]
+
+    if not (lon_min <= row["lon"] <= lon_max):
+        return False
+    if not (lat_min <= row["lat"] <= lat_max):
+        return False
+    if not (spd_min <= row["velocity"] <= spd_max):
+        return False
+    for axis in ("accel_x", "accel_y", "accel_z"):
+        if not (acc_min <= row[axis] <= acc_max):
+            return False
+    for axis in ("gyro_x", "gyro_y", "gyro_z"):
+        if not (gyr_min <= row[axis] <= gyr_max):
+            return False
+    return True
+
+
+# ============================================================
+# 필터링 (lambda/filter.py 인라인)
+# ============================================================
+def filter_by_bbox(rows: list[dict]) -> list[dict]:
+    """대상 도로 bounding box 안의 row만 필터링한다."""
+    return [row for row in rows if _is_in_any_bbox(row["lon"], row["lat"])]
+
+
+def _is_in_any_bbox(lon: float, lat: float) -> bool:
+    for bbox in BBOXES.values():
+        if (bbox["min_lon"] <= lon <= bbox["max_lon"]
+                and bbox["min_lat"] <= lat <= bbox["max_lat"]):
+            return True
+    return False
+
+
+# ============================================================
+# 도로망 로드 + 경로 생성
+# ============================================================
 def load_road_network(csv_path: str) -> dict:
-    """도로망 CSV에서 세그먼트 좌표 로드 (producer.py 복사)"""
+    """도로망 CSV에서 세그먼트 좌표 로드"""
     links = {}
     with open(csv_path) as f:
         reader = csv.DictReader(f)
@@ -63,7 +189,7 @@ def load_road_network(csv_path: str) -> dict:
     return links
 
 def pick_route(links: dict, min_segments: int = 10, max_segments: int = 100) -> list[dict]:
-    """도로망에서 랜덤 경로 선택 (producer.py 복사)"""
+    """도로망에서 랜덤 경로 선택"""
     target = int(random.lognormvariate(math.log(30), 0.5))
     target = max(min_segments, min(target, max_segments))
 
@@ -103,8 +229,11 @@ def pick_route(links: dict, min_segments: int = 10, max_segments: int = 100) -> 
     return route[:target]
 
 
+# ============================================================
+# 주행 데이터 생성
+# ============================================================
 def generate_speed_profile(num_points: int) -> list[float]:
-    """현실적인 속도 프로파일 생성 (producer.py 복사)"""
+    """현실적인 속도 프로파일 생성"""
     speeds = []
     current_speed = 0.0
     target_speed = random.uniform(50, 80)
@@ -140,7 +269,7 @@ def generate_speed_profile(num_points: int) -> list[float]:
 
 
 def generate_pothole_impact(intensity: float = 1.0) -> list[dict]:
-    """포트홀 충격 패턴 생성 (producer.py 복사)"""
+    """포트홀 충격 패턴 생성"""
     pattern = []
     main_impact = random.uniform(5, 15) * intensity
     pattern.append({"acc_z": main_impact, "gyr": random.uniform(1, 4) * intensity})
@@ -160,17 +289,7 @@ def generate_trip(
     points_per_seg: int = 10,
     base_ts_ms: int = None,
 ) -> dict:
-    """
-    현실적인 주행 데이터 생성 (producer.py 기반)
-
-    Args:
-        vehicle_id: 차량 ID
-        route: 세그먼트 리스트
-        points_per_seg: 세그먼트당 센서 포인트 (기본 10 = 100 → 1,000으로 증가)
-
-    Returns:
-        trip JSON dict (Lambda 입력 형식과 호환)
-    """
+    """현실적인 주행 데이터 생성"""
     device_type = random.choice(list(DEVICE_PROFILES.keys()))
     profile = DEVICE_PROFILES[device_type]
 
@@ -217,7 +336,7 @@ def generate_trip(
                 gyr_y += impact["gyr"] * random.uniform(0.3, 0.7)
 
             if j == 0:
-                if random.random() < 0.05 and speed > 10:  # 5% 포트홀 확률
+                if random.random() < 0.05 and speed > 10:
                     intensity = random.uniform(0.5, 2.0)
                     impact_queue.extend(generate_pothole_impact(intensity))
 
@@ -257,50 +376,70 @@ def generate_trip(
     }
 
 
-def process_and_upload(trip_json: dict) -> dict:
-    """trip JSON → 파싱 → 필터링 → S3 저장 (Lambda 파이프라인)"""
+# ============================================================
+# 처리 + S3 업로드
+# ============================================================
+def process_trip(trip_json: dict) -> dict:
+    """trip JSON → 파싱 → 필터링 → rows 반환 (S3 저장은 batch에서)"""
     try:
-        # 1. 파싱
         trip_id, vehicle_id, date, rows = parse_trip(trip_json)
 
         if not rows:
-            return {"status": "parse_failed", "trip_id": trip_id}
+            return {"status": "parse_failed", "trip_id": trip_id, "rows": [], "date": date}
 
-        # 2. 필터링 (도로 범위)
         filtered_rows = filter_by_bbox(rows)
 
         if not filtered_rows:
-            return {"status": "filtered_out", "trip_id": trip_id}
-
-        # 3. S3 저장
-        s3_key = write_to_s3(filtered_rows, date, trip_id)
+            return {"status": "filtered_out", "trip_id": trip_id, "rows": [], "date": date}
 
         return {
             "status": "success",
             "trip_id": trip_id,
             "vehicle_id": vehicle_id,
             "date": date,
-            "rows_uploaded": len(filtered_rows),
-            "s3_key": s3_key,
+            "rows": filtered_rows,
         }
 
     except Exception as e:
         logger.error(f"Error processing trip: {e}")
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": str(e), "rows": [], "date": None}
 
 
-def batch_generate_and_upload(num_trips: int, links: dict, start_date: datetime = None, end_date: datetime = None):
-    """배치로 더미 데이터 생성 및 S3 업로드"""
+def flush_buffer(buffer_rows: list[dict], date: str, batch_idx: int) -> str:
+    """버퍼에 모인 rows를 하나의 Parquet로 병합하여 S3에 저장"""
+    table = pa.Table.from_pylist(buffer_rows, schema=SCHEMA)
+    buf = io.BytesIO()
+    pq.write_table(table, buf, compression="snappy")
+    buf.seek(0)
+
+    key = f"{S3_PREFIX}/dt={date}/merged_{batch_idx:04d}.parquet"
+    s3.put_object(Bucket=S3_BUCKET, Key=key, Body=buf.getvalue())
+
+    return key
+
+
+def batch_generate_and_upload(
+    num_trips: int,
+    links: dict,
+    start_date: datetime = None,
+    end_date: datetime = None,
+    merge_size: int = 2000,
+):
+    """배치로 더미 데이터 생성 및 S3 업로드 (merge_size개씩 병합)"""
     if start_date and end_date:
-        logger.info(f"생성 시작: {num_trips}개 trip ({start_date.date()} ~ {end_date.date()})")
+        logger.info(f"생성 시작: {num_trips}개 trip ({start_date.date()} ~ {end_date.date()}), {merge_size}개씩 병합")
         range_ms = int((end_date - start_date).total_seconds() * 1000)
     else:
-        logger.info(f"생성 시작: {num_trips}개 trip (옵션 1: points_per_seg=10, ~80-120KB/trip)")
+        logger.info(f"생성 시작: {num_trips}개 trip, {merge_size}개씩 병합")
         range_ms = None
 
     success_count = 0
     skip_count = 0
     error_count = 0
+    batch_idx = 0
+
+    buffer_rows = []
+    buffer_date = None
 
     start_time = time.time()
 
@@ -312,23 +451,21 @@ def batch_generate_and_upload(num_trips: int, links: dict, start_date: datetime 
         if start_date and range_ms:
             base_ts_ms = int(start_date.timestamp() * 1000) + random.randint(0, range_ms)
 
-        # 옵션 1: points_per_seg=10 (기본 3-8에서 10으로 증가)
         trip_json = generate_trip(vehicle_id, route, points_per_seg=10, base_ts_ms=base_ts_ms)
-
-        result = process_and_upload(trip_json)
+        result = process_trip(trip_json)
 
         if result["status"] == "success":
             success_count += 1
-            elapsed = time.time() - start_time
-            rate = (i + 1) / elapsed if elapsed > 0 else 0
-            eta_sec = (num_trips - i - 1) / rate if rate > 0 else 0
-            eta_hours = eta_sec / 3600
+            buffer_rows.extend(result["rows"])
+            buffer_date = result["date"]
 
-            logger.info(
-                f"[{i+1:5d}/{num_trips}] ✓ {result['trip_id']}: "
-                f"{result['rows_uploaded']} rows → {result['s3_key'].split('/')[-1]} "
-                f"| 속도: {rate:.1f} trips/sec | ETA: {eta_hours:.1f}h"
-            )
+            if success_count % merge_size == 0 and buffer_rows:
+                s3_key = flush_buffer(buffer_rows, buffer_date, batch_idx)
+                logger.info(
+                    f"[batch {batch_idx}] {len(buffer_rows)} rows → {s3_key.split('/')[-1]}"
+                )
+                buffer_rows = []
+                batch_idx += 1
         else:
             if result["status"] == "filtered_out":
                 skip_count += 1
@@ -336,12 +473,25 @@ def batch_generate_and_upload(num_trips: int, links: dict, start_date: datetime 
                 error_count += 1
                 logger.warning(f"[{i+1:5d}] {result['status']}: {result.get('error', '')}")
 
+        if (i + 1) % 500 == 0:
+            elapsed = time.time() - start_time
+            rate = (i + 1) / elapsed if elapsed > 0 else 0
+            eta_hours = (num_trips - i - 1) / rate / 3600 if rate > 0 else 0
+            logger.info(f"  진행: {i+1}/{num_trips} | {rate:.1f} trips/sec | ETA: {eta_hours:.1f}h")
+
+    # 남은 버퍼 flush
+    if buffer_rows:
+        s3_key = flush_buffer(buffer_rows, buffer_date, batch_idx)
+        logger.info(f"[batch {batch_idx}] {len(buffer_rows)} rows → {s3_key.split('/')[-1]}")
+        batch_idx += 1
+
     elapsed = time.time() - start_time
     logger.info(
         f"\n완료!\n"
         f"  성공: {success_count}/{num_trips}\n"
         f"  스킵: {skip_count}\n"
         f"  오류: {error_count}\n"
+        f"  병합 파일: {batch_idx}개\n"
         f"  소요시간: {elapsed/3600:.1f}시간 ({elapsed/60:.0f}분)"
     )
 
@@ -349,16 +499,17 @@ def batch_generate_and_upload(num_trips: int, links: dict, start_date: datetime 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="더미 데이터 배치 생성 (옵션 1: 빠른 처리)")
+    parser = argparse.ArgumentParser(description="더미 센서 데이터 배치 생성 및 S3 적재")
     parser.add_argument("--trips", type=int, default=100, help="생성할 trip 수")
     parser.add_argument(
         "--road-network",
         type=str,
-        default=str(Path(__file__).parent.parent / "producer" / "road_network_863.csv"),
+        default=str(Path(__file__).parent.parent.parent / "road_network_builder" / "output" / "road_network_863.csv"),
         help="도로망 CSV 경로",
     )
+    parser.add_argument("--merge-size", type=int, default=2000, help="병합 단위 trip 수 (기본: 2000)")
     parser.add_argument("--test", action="store_true", help="테스트 모드 (데이터 생성만, S3 저장 X)")
-    parser.add_argument("--date", type=str, default=None, help="날짜 (YYYY-MM-DD), 미지정 시 오늘, 예: 2026-02-16")
+    parser.add_argument("--date", type=str, default=None, help="날짜 (YYYY-MM-DD), 미지정 시 오늘")
 
     args = parser.parse_args()
 
@@ -369,9 +520,8 @@ if __name__ == "__main__":
     links = load_road_network(args.road_network)
 
     if args.test:
-        # 테스트 모드: 데이터 생성만 확인
         logger.info("=== 테스트 모드: 데이터 생성 확인 ===")
-        vehicle_id = f"v001"
+        vehicle_id = "v001"
         route = pick_route(links)
         trip_json = generate_trip(vehicle_id, route, points_per_seg=10)
 
@@ -381,7 +531,6 @@ if __name__ == "__main__":
         logger.info(f"Records 수: {len(trip_json['records'])}")
         logger.info(f"Trip JSON 크기: {len(json.dumps(trip_json)) / 1024:.2f} KB")
 
-        # 첫 번째 record 샘플
         if trip_json['records']:
             logger.info(f"\n첫 번째 record 샘플:")
             logger.info(json.dumps(trip_json['records'][0], indent=2))
@@ -389,5 +538,4 @@ if __name__ == "__main__":
         logger.info("\n✓ 데이터 생성 성공!")
 
     else:
-        # 정상 모드: S3 업로드
-        batch_generate_and_upload(args.trips, links, start_date, end_date)
+        batch_generate_and_upload(args.trips, links, start_date, end_date, merge_size=args.merge_size)
