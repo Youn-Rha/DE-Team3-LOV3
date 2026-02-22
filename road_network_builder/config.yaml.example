@@ -12,4 +12,4 @@ segment:
   output_crs: "EPSG:4326"         # WGS84 (GPS 매칭용)
 
 output:
-  path: "output/road_segments.parquet"
+  path: "output/road_segments.csv"
