@@ -17,7 +17,7 @@
 
 ## DAG 구조
 
-![DAG Graph](../docs/images/dag_graph.png)
+![DAG Graph](../docs/images/dag_pipeline.png)
 
 ## 파이프라인 흐름
 

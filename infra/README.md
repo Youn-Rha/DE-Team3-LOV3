@@ -16,7 +16,7 @@ Spark Standalone 클러스터와 Airflow 서버를 AWS EC2 위에 구성하고, 
 │  ┌──────────────┐    SSH    ┌──────────────────────┐         │
 │  │  EC2-1       │ ────────→ │  EC2-2               │         │
 │  │  Airflow     │           │  Spark Master        │         │
-│  │  t3.medium   │           │  t3.large            │         │
+│  │  t3.medium   │           │  t3.medium            │         │
 │  │  sg_airflow  │           │  sg_spark            │         │
 │  └──────────────┘           └──────┬───────────────┘         │
 │                                SSH │                         │
@@ -25,7 +25,7 @@ Spark Standalone 클러스터와 Airflow 서버를 AWS EC2 위에 구성하고, 
 │         ▼                          ▼            ▼            │
 │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────────┐  │
 │  │Worker 1│ │Worker 2│ │Worker 3│ │Worker 4│ │  EC2-5     │  │
-│  │t3.large│ │t3.large│ │t3.large│ │t3.large│ │  Serving   │  │
+│  │t3.medium│ │t3.medium│ │t3.medium│ │t3.medium│ │  Serving   │  │
 │  └────────┘ └────────┘ └────────┘ └────────┘ │  Postgres  │  │
 │                                              │  Streamlit │  │
 │                                              └────────────┘  │
@@ -43,8 +43,8 @@ Spark Standalone 클러스터와 Airflow 서버를 AWS EC2 위에 구성하고, 
 | EC2 | 역할 | 인스턴스 | vCPU | 메모리 | 보안그룹 | IAM 역할 |
 |-----|------|----------|------|--------|----------|----------|
 | EC2-1 | Airflow 서버 | t3.medium | 2 | 4 GiB | sg_airflow | EC2FullAccess + S3ReadOnly |
-| EC2-2 | Spark Master | t3.large | 2 | 8 GiB | sg_spark | S3FullAccess |
-| EC2-3~6 | Spark Worker ×4 | t3.large | 2 | 8 GiB | sg_spark | S3FullAccess |
+| EC2-2 | Spark Master | t3.medium | 2 | 4 GiB | sg_spark | S3FullAccess |
+| EC2-3~6 | Spark Worker ×4 | t3.medium | 2 | 4 GiB | sg_spark | S3FullAccess |
 | EC2-5 | Serving (PostgreSQL + Dashboard) | - | - | - | sg_serving | S3ReadOnly |
 
 ## 핵심 설계
