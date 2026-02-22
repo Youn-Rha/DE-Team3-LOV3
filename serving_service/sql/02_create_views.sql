@@ -75,14 +75,14 @@ WITH segment_stats AS (
 ),
 -- CTE 2: 접수된 공공 포트홀 민원 건수를 세그먼트별로 사전 집계
 complaint_stats AS (
-    SELECT 
+    SELECT
         nearest_s_id AS s_id,
-        COUNT(id) AS complaint_count         
+        COUNT(id) AS complaint_count
     FROM pothole_complaints
     GROUP BY nearest_s_id
 )
--- 메인 쿼리
-SELECT 
+-- 메인 쿼리: 도로 등급(road_grade) 가중치 추가
+SELECT
     ss.base_date AS date,                    -- 🌟 기준일(최신 날짜) 출력
     ss.s_id,
     sa.road_name,
@@ -92,15 +92,23 @@ SELECT
     ss.total_traffic,
     ss.total_impacts,
     COALESCE(cs.complaint_count, 0) AS complaint_count,
-    (ss.total_impacts * 1.0) + (COALESCE(cs.complaint_count, 0) * 50.0) AS priority_score,
+    (ss.total_impacts * 1.0)
+        + (COALESCE(cs.complaint_count, 0) * 50.0)
+        + (COALESCE(rg.road_grade, 3) * 10.0) AS priority_score,
     RANK() OVER (
-        ORDER BY ((ss.total_impacts * 1.0) + (COALESCE(cs.complaint_count, 0) * 50.0)) DESC
+        ORDER BY (
+            (ss.total_impacts * 1.0)
+            + (COALESCE(cs.complaint_count, 0) * 50.0)
+            + (COALESCE(rg.road_grade, 3) * 10.0)
+        ) DESC
     ) AS priority_rank
-FROM 
+FROM
     segment_stats ss
-LEFT JOIN 
+LEFT JOIN
     complaint_stats cs ON ss.s_id = cs.s_id
-LEFT JOIN 
-    segment_address sa ON ss.s_id = sa.s_id;
+LEFT JOIN
+    segment_address sa ON ss.s_id = sa.s_id
+LEFT JOIN
+    segment_road_grade rg ON ss.s_id = rg.s_id;
 
 CREATE UNIQUE INDEX idx_mvw_priority_sid ON mvw_dashboard_repair_priority (s_id);

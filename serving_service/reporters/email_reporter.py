@@ -80,11 +80,13 @@ class EmailReporter(BaseLoader):
         """보수 우선순위 (mvw_dashboard_repair_priority MV 사용)"""
         query = f"""
             SELECT
-                s_id,
+                priority_rank,
                 COALESCE(road_name, '-') AS road_name,
-                total_impacts,
+                COALESCE(district, '-') AS district,
+                priority_score,
                 complaint_count,
-                priority_score
+                centroid_lat,
+                centroid_lon
             FROM mvw_dashboard_repair_priority
             ORDER BY priority_rank ASC
             LIMIT {limit}
@@ -93,12 +95,17 @@ class EmailReporter(BaseLoader):
             result = self.fetch_query(query)
             segments = []
             for row in result:
+                lat = round(row[5], 4) if row[5] else None
+                lon = round(row[6], 4) if row[6] else None
+                road_name = row[1]
+                if lat and lon:
+                    road_name = f"{road_name}({lat}, {lon})"
                 segments.append({
-                    "s_id": row[0],
-                    "road_name": row[1],
-                    "total_impacts": row[2],
-                    "complaint_count": row[3],
-                    "priority_score": float(row[4]) if row[4] else 0,
+                    "priority_rank": row[0],
+                    "road_name": road_name,
+                    "district": row[2],
+                    "priority_score": float(row[3]) if row[3] else 0,
+                    "complaint_count": row[4],
                 })
             return segments
         except Exception as e:
@@ -153,103 +160,46 @@ class EmailReporter(BaseLoader):
         if date is None:
             date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-        kpi = self.get_daily_kpi()
-        alerts = self.get_worsening_alerts(limit=5)
         priority = self.get_repair_priority(limit=5)
 
-        if not kpi:
+        if not priority:
             return f"<p>No data available for {date}</p>"
-
-        # 변화량 부호 표시
-        def sign(val):
-            return f"+{val}" if val > 0 else str(val)
 
         html = f"""
         <html>
             <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <h2>포트홀 일일 리포트 ({kpi['date']})</h2>
+                <h2>포트홀 보수 우선순위 리포트 ({date})</h2>
                 <hr style="border: none; border-top: 2px solid #007bff;">
 
-                <h3>Daily KPI</h3>
-                <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-                    <tr style="background-color: #f8f9fa;">
-                        <td style="padding: 10px; border: 1px solid #ddd;"><strong>탐지 건수</strong></td>
-                        <td style="padding: 10px; border: 1px solid #ddd; font-size: 18px;">
-                            <strong>{kpi['total_impacts']}</strong>건
-                            (전일 대비 {sign(kpi['impact_change'])})
-                        </td>
-                    </tr>
-                    <tr>
-                        <td style="padding: 10px; border: 1px solid #ddd;"><strong>활성 구간</strong></td>
-                        <td style="padding: 10px; border: 1px solid #ddd; font-size: 18px;">
-                            <strong>{kpi['active_segments']}</strong>개
-                            (전일 대비 {sign(kpi['segment_change'])})
-                        </td>
-                    </tr>
-                </table>
-        """
-
-        # 악화 구간
-        if alerts:
-            html += """
-                <h3>악화 구간</h3>
-                <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-                    <thead style="background-color: #dc3545; color: white;">
-                        <tr>
-                            <th style="padding: 8px; text-align: left;">#</th>
-                            <th style="padding: 8px; text-align: left;">세그먼트</th>
-                            <th style="padding: 8px; text-align: left;">도로명</th>
-                            <th style="padding: 8px; text-align: right;">7일 평균 대비</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            """
-            for i, a in enumerate(alerts, 1):
-                row_color = "#ffffff" if i % 2 == 1 else "#f8f9fa"
-                html += f"""
-                        <tr style="background-color: {row_color};">
-                            <td style="padding: 8px; border: 1px solid #ddd;">{i}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">{a['s_id']}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">{a['road_name']}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">+{a['pct_of_avg']:.0f}%</td>
-                        </tr>
-                """
-            html += """
-                    </tbody>
-                </table>
-            """
-
-        # 보수 우선순위
-        if priority:
-            html += """
                 <h3>보수 우선순위 TOP 5</h3>
                 <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
                     <thead style="background-color: #007bff; color: white;">
                         <tr>
-                            <th style="padding: 8px; text-align: left;">#</th>
-                            <th style="padding: 8px; text-align: left;">세그먼트</th>
+                            <th style="padding: 8px; text-align: left;">순위</th>
                             <th style="padding: 8px; text-align: left;">도로명</th>
-                            <th style="padding: 8px; text-align: right;">충격 건수</th>
-                            <th style="padding: 8px; text-align: right;">민원 건수</th>
+                            <th style="padding: 8px; text-align: left;">관할 구역</th>
+                            <th style="padding: 8px; text-align: right;">위험 점수</th>
+                            <th style="padding: 8px; text-align: right;">민원</th>
                         </tr>
                     </thead>
                     <tbody>
-            """
-            for i, seg in enumerate(priority, 1):
-                row_color = "#ffffff" if i % 2 == 1 else "#f8f9fa"
-                html += f"""
+        """
+        for i, seg in enumerate(priority, 1):
+            row_color = "#ffffff" if i % 2 == 1 else "#f8f9fa"
+            html += f"""
                         <tr style="background-color: {row_color};">
-                            <td style="padding: 8px; border: 1px solid #ddd;">{i}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">{seg['s_id']}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">{seg['priority_rank']}</td>
                             <td style="padding: 8px; border: 1px solid #ddd;">{seg['road_name']}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['total_impacts']}건</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">{seg['district']}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['priority_score']:.1f}</td>
                             <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">{seg['complaint_count']}건</td>
                         </tr>
-                """
-            html += """
+            """
+        html += """
                     </tbody>
                 </table>
-            """
+
+        """
 
         html += """
                 <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
