@@ -189,7 +189,7 @@ def run_job(
     config: Dict[str, Any],
     input_base_path: str,
     output_base_path: str,
-    batch_date: str = None,
+    batch_date: Optional[str] = None,
 ) -> None:
     batch_dt = _batch_date(batch_date)
     input_base_path = input_base_path.rstrip("/")

@@ -36,6 +36,10 @@ derby.log
 .env
 .env.*
 **/.env
+.streamlit/
+
+# Streamlit secrets
+**/.streamlit/secrets.toml
 
 **/data/
 
