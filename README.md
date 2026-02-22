@@ -85,15 +85,15 @@
 
 ### 4-3. 모듈 설명
 
-[road_network_builder](./road_network_builder/README.md) : ITS 표준 노드링크 데이터에서 863호선 도로망을 50m 세그먼트로 분할하고, 도로 위험도 등급을 산출하는 전처리 도구
+- [road_network_builder](./road_network_builder/README.md) : ITS 표준 노드링크 데이터에서 863호선 도로망을 50m 세그먼트로 분할하고, 도로 위험도 등급을 산출하는 전처리 도구
 
-[processing_service](./processing_service/README.md) : Spark 기반 2단계 배치 처리 — Stage1 이상탐지(Z축 충격 이벤트 판별) → Stage2 공간 클러스터링(50m 세그먼트 집계)
+- [processing_service](./processing_service/README.md) : Spark 기반 2단계 배치 처리 — Stage1 이상탐지(Z축 충격 이벤트 판별) → Stage2 공간 클러스터링(50m 세그먼트 집계)
 
-[serving_service](./serving_service/README.md) : S3 Parquet → PostgreSQL 적재, Materialized View 기반 대시보드 API, 보수 우선순위 스코어링
+- [serving_service](./serving_service/README.md) : S3 Parquet → PostgreSQL 적재, Materialized View 기반 대시보드 API, 보수 우선순위 스코어링
 
-[infra](./infra/README.md) : Spark Standalone 클러스터(Master 1 + Worker 4) 구성, EC2 온디맨드 기동/종료, 설정 파일 자동 배포
+- [infra](./infra/README.md) : Spark Standalone 클러스터(Master 1 + Worker 4) 구성, EC2 온디맨드 기동/종료, 설정 파일 자동 배포
 
-[airflow_service](./airflow_service/README.md) : 4개 TaskGroup(인프라 준비 → Spark 처리 → 서빙 → 인프라 정리)으로 구성된 일간 배치 파이프라인 DAG
+- [airflow_service](./airflow_service/README.md) : 4개 TaskGroup(인프라 준비 → Spark 처리 → 서빙 → 인프라 정리)으로 구성된 일간 배치 파이프라인 DAG
 
 ## 5. 데이터 파이프라인 설계 및 기술적 고려
 
