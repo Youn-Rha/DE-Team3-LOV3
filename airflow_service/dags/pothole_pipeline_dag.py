@@ -74,33 +74,43 @@ ALL_INSTANCE_IDS = (
 # ============================================================
 # Slack 장애 알림 콜백
 # ============================================================
-def slack_failure_callback(context):
-    """Task 실패 시 Slack Incoming Webhook으로 알림 전송"""
+def _send_slack(text):
+    """Slack Incoming Webhook 메시지 전송"""
     if not SLACK_WEBHOOK_URL:
         return
-
-    ti = context.get("task_instance")
-    exception = context.get("exception", "")
-
-    payload = {
-        "text": (
-            f":red_circle: *Airflow Task 실패*\n"
-            f"*DAG:* `{ti.dag_id}`\n"
-            f"*Task:* `{ti.task_id}`\n"
-            f"*Date:* `{context.get('execution_date')}`\n"
-            f"*Error:* `{str(exception)[:300]}`"
-        )
-    }
-
     try:
         req = Request(
             SLACK_WEBHOOK_URL,
-            data=json.dumps(payload).encode("utf-8"),
+            data=json.dumps({"text": text}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
         urlopen(req, timeout=10)
     except Exception:
-        pass  # Slack 알림 실패로 파이프라인 중단하지 않음
+        pass
+
+
+def slack_failure_callback(context):
+    """Task 실패 시 Slack 알림"""
+    ti = context.get("task_instance")
+    exception = context.get("exception", "")
+    _send_slack(
+        f":red_circle: *Airflow Task 실패*\n"
+        f"*DAG:* `{ti.dag_id}`\n"
+        f"*Task:* `{ti.task_id}`\n"
+        f"*Date:* `{context.get('execution_date')}`\n"
+        f"*Error:* `{str(exception)[:300]}`"
+    )
+
+
+def slack_success_callback(context):
+    """DAG 전체 성공 시 Slack 알림"""
+    dag_run = context.get("dag_run")
+    _send_slack(
+        f":large_green_circle: *파이프라인 성공*\n"
+        f"*DAG:* `{dag_run.dag_id}`\n"
+        f"*Date:* `{dag_run.execution_date.strftime('%Y-%m-%d')}`\n"
+        f"*Duration:* `{dag_run.end_date - dag_run.start_date}`"
+    )
 
 
 # ============================================================
@@ -120,11 +130,12 @@ with DAG(
     dag_id="pothole_pipeline_spark_standalone",
     default_args=default_args,
     description="포트홀 탐지 파이프라인: Spark 처리 → RDB 적재 → MV 갱신 → 이메일 리포트",
-    schedule_interval="0 17 * * *",  # 매일 02:00 KST (= 17:00 UTC)
+    schedule_interval=None,  # 수동 트리거 전용 (run_pipeline.sh)
     start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
     catchup=False,
     max_active_runs=1,
     tags=["spark", "pothole", "pipeline"],
+    on_success_callback=slack_success_callback,
 ) as dag:
 
     # --------------------------------------------------------
@@ -178,8 +189,9 @@ EOF
         cat /opt/spark/conf/workers
 
         /opt/spark/sbin/start-all.sh
+        /opt/spark/sbin/start-history-server.sh
         """,
-        cmd_timeout=120,
+        cmd_timeout=300,
     )
 
     # --------------------------------------------------------
@@ -337,7 +349,7 @@ EOF
     stop_spark = SSHOperator(
         task_id="stop_spark",
         ssh_conn_id=SSH_CONN_ID,
-        command="source ~/.bashrc && /opt/spark/sbin/stop-all.sh ;",
+        command="source ~/.bashrc && /opt/spark/sbin/stop-all.sh ; /opt/spark/sbin/stop-history-server.sh ;",
         cmd_timeout=120,
         trigger_rule="all_done",
     )
