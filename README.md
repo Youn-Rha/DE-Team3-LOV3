@@ -87,7 +87,17 @@
 
 ## 4. 데이터 프로덕트 
 
-### 4-1. 모듈 설명
+### 4-1. 데이터 흐름도
+
+![데이터 흐름도](./docs/images/data_flow.png)
+
+- **차량 센서 데이터** — 가속도, 자이로, GPS 등 주행 측정값 (S3 Parquet)
+- **ITS 표준노드링크** — 863호선 도로 속성 (Shapefile)
+- **외부 API** — Kakao 역지오코딩, 공공 민원 데이터
+
+### 4-2. 데이터 아키텍처
+
+### 4-3. 모듈 설명
 
 각 모듈의 상세 내용은 개별 문서를 참고해 주세요.
 
@@ -99,16 +109,6 @@
 | [**serving_service**](./serving_service/README.md) | S3 → PostgreSQL 적재, MV 기반 대시보드, 우선순위 스코어링 |
 | [**infra**](./infra/README.md) | Spark Standalone 클러스터 구성, EC2 온디맨드 기동/종료 |
 | [**airflow_service**](./airflow_service/README.md) | 4개 TaskGroup으로 구성된 일간 배치 파이프라인 DAG |
-
-### 4-2. 데이터 흐름도
-
-![데이터 흐름도](./docs/images/data_flow.png)
-
-- **차량 센서 데이터** — 가속도, 자이로, GPS 등 주행 측정값 (S3 Parquet)
-- **ITS 표준노드링크** — 863호선 도로 속성 (Shapefile)
-- **외부 API** — Kakao 역지오코딩, 공공 민원 데이터
-
-### 4-3. 데이터 아키텍처
 
 ## 5. 데이터 파이프라인 설계 및 기술적 고려
 
