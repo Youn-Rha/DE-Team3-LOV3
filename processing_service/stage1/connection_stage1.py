@@ -8,9 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
-    """
-    YAML 설정 파일 로드 (로컬 또는 s3a://)
-    """
     path = config_path.strip()
     try:
         if path.startswith("s3a://"):
@@ -43,19 +40,27 @@ def get_spark_session(config: Dict[str, Any]) -> SparkSession:
         logger.info("Spark Master: %s", master)
     else:
         logger.info("Spark Master: 미설정 (클러스터 모드)")
-
     builder = (
         builder
-        .config("spark.sql.adaptive.enabled", spark_cfg.get("adaptive_enabled", True))
-        .config("spark.sql.adaptive.coalescePartitions.enabled", spark_cfg.get("adaptive_coalesce_enabled", True))
-        .config("spark.sql.adaptive.skewJoin.enabled", spark_cfg.get("skew_join_enabled", True))
+        .config("spark.sql.adaptive.enabled", spark_cfg.get("adaptive_enabled", False))
+        .config("spark.sql.adaptive.coalescePartitions.enabled", spark_cfg.get("adaptive_coalesce_enabled", False))
+        .config("spark.sql.adaptive.skewJoin.enabled", spark_cfg.get("skew_join_enabled", False))
         .config("spark.sql.files.maxPartitionBytes", f"{spark_cfg.get('partition_size_mb', 128) * 1024 * 1024}")
-        .config("spark.sql.autoBroadcastJoinThreshold", spark_cfg.get("broadcast_threshold_mb", 50) * 1024 * 1024)
     )
     shuffle = spark_cfg.get("shuffle_partitions")
     if shuffle is not None and shuffle != "auto":
         builder = builder.config("spark.sql.shuffle.partitions", shuffle)
 
     spark = builder.getOrCreate()
+
+    conf = spark.sparkContext.getConf()
+    logger.info("executor-memory    : %s", conf.get("spark.executor.memory", "미설정"))
+    logger.info("executor-cores     : %s", conf.get("spark.executor.cores", "미설정"))
+    logger.info("num-executors      : %s", conf.get("spark.executor.instances", "미설정"))
+    logger.info("driver-memory      : %s", conf.get("spark.driver.memory", "미설정"))
+    logger.info("shuffle.partitions : %s", conf.get("spark.sql.shuffle.partitions", "미설정"))
+    logger.info("adaptive.enabled   : %s", conf.get("spark.sql.adaptive.enabled", "미설정"))
+    logger.info("maxPartitionBytes  : %s", conf.get("spark.sql.files.maxPartitionBytes", "미설정"))
+
     logger.info("SparkSession 생성 완료")
     return spark

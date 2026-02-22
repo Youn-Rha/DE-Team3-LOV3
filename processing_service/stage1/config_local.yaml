@@ -1,0 +1,40 @@
+storage:
+  input_base_path: "./data/raw-sensor-data"
+  output_base_path: "./data/stage1_anomaly_detected"
+  speed_bump_path: "./data/yeosu_provincial_road_speed_bump_data.csv"
+  input_partition_format: "dt=YYYY-MM-DD"
+  ttl_days: 14
+
+spark:
+  master: "local[*]"
+  app_name: "Stage1-AnomalyDetection-Local"
+  partition_size_mb: 128
+  min_partition_size_mb: 128
+  shuffle_partitions: 4
+  coalesce_partitions: 4
+  adaptive_enabled: true
+  adaptive_coalesce_enabled: true
+  skew_join_enabled: true
+  target_file_size_mb: 256
+
+context_filtering:
+  velocity_threshold: 5.0
+  hdop_threshold: 5.0
+  min_satellites: 4
+
+normalization:
+  sensor_columns:
+    - accel_z
+    - gyro_y
+  partition_by: trip_id
+
+impact_score:
+  weights:
+    accel_z: 0.7
+    gyro_y: 0.3
+  threshold: 3.0
+
+logging:
+  level: INFO
+  log_metrics: true
+  log_sample_size: 5

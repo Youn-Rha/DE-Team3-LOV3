@@ -81,7 +81,7 @@ class AnomalyDetectionPipeline:
             raise ValueError("필수 가중치 누락: impact_score.weights.gyro_y")
 
     # 이상치 제거 -> z값 계산 진행
-    def run(self,input_df: DataFrame) -> DataFrame: # 걍 s3에 저장하는거면 df return 안해줘도 되지 않나?
+    def run(self,input_df: DataFrame) -> DataFrame:
         filtered_df = self._context_filtering(input_df)
         return self._compute_anomaly_scores(filtered_df)
     
